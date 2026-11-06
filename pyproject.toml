@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ffdecmcp"
-version = "0.1.2"
-description = "MCP wrapper for JPEXS Free Flash Decompiler (FFDec) - expose SWF decompilation tools to AI assistants"
+version = "0.2.1"
+description = "MCP wrapper for JPEXS Free Flash Decompiler (FFDec) - extended fork with full SWF CLI coverage (decompile, edit, convert) for AI assistants"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
     "fastmcp>=2.14.0",
     "python-dotenv>=1.0.0",
+    "cryptography>=42.0.0",
 ]
 
 [project.urls]
