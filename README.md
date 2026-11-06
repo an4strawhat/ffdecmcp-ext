@@ -214,13 +214,17 @@ Timings scale with asset count, not file size alone: a 2.9 MB SWF with 10k+ asse
 
 ## References
 
+- **Upstream project**: [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) — the MCP wrapper this fork extends (MIT)
 - **FFDec**: https://github.com/jindrapetrik/jpexs-decompiler
 - **FFDec CLI docs**: https://github.com/jindrapetrik/jpexs-decompiler/wiki/Commandline-arguments
 - **Air crypto reference**: FFDec `HarmanSwfEncrypt` (LGPL), based on `swfdecrypt.py` by NathaanTFM
+- **HARMAN / Adobe AIR SDK**: origin of the SWF encryption format; the SDK's `swfencrypt` tool was used for interop verification
 - **MCP**: https://modelcontextprotocol.io
 
 ## License
 
-MIT — see the `LICENSE` file. Note that `src/ffdecmcp/aircrypto.py` is a Python
-port of FFDec's LGPL-licensed `HarmanSwfEncrypt` and is therefore distributed
-under the GNU LGPL v3; all other code is MIT.
+MIT — see the `LICENSE` file. This project is based on sublimnl's MIT-licensed
+`ffdecmcp`; fork modifications © an4strawhat. Note that
+`src/ffdecmcp/aircrypto.py` is a Python port of FFDec's LGPL-licensed
+`HarmanSwfEncrypt` and is therefore distributed under the GNU LGPL v3; all
+other code is MIT.
