@@ -2,7 +2,7 @@
 
 MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)** — exposes the full FFDec CLI to AI assistants: decompilation, inspection, SWF **editing**, format conversion, and HARMAN Air encryption.
 
-> **Fork notice:** based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). This fork (v0.2.1) adds the 33 missing FFDec commands as tools, fixes several upstream bugs, and implements Air encryption natively in Python.
+> **Fork notice:** maintained at [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext), based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). **Not published on PyPI** — install from git (see [Quick Start](#quick-start)). This fork (v0.2.1) adds the 33 missing FFDec commands as tools, fixes several upstream bugs, and implements Air encryption natively in Python.
 
 **39 tools** — all verified against real SWFs (see [Verification](#verification)).
 
@@ -121,39 +121,62 @@ Notes from testing: all 4,740 bundled SWFs were plain `CWS`/`ZWS2` (none pre-enc
 
 **Prerequisites:** Python 3.10+, Java (for FFDec). No AIR SDK required.
 
-### Claude Code
+This fork is **not on PyPI** — install from git:
 
 ```bash
-claude mcp add ffdecmcp -- uvx --from . ffdecmcp
+pip install "ffdecmcp @ git+https://github.com/an4strawhat/ffdecmcp-ext.git"
+# or, for development:
+git clone https://github.com/an4strawhat/ffdecmcp-ext.git
+pip install -e "./ffdecmcp[dev]"
 ```
 
-### Claude Desktop
+### Run the server
 
-```json
+```bash
+python -m ffdecmcp
+# against a specific FFDec installation:
+python -m ffdecmcp --ffdec-path C:\path\to\ffdec.jar
+```
+
+### OpenCode
+
+```jsonc
 {
-  "mcpServers": {
-    "ffdecmcp": {
-      "command": "uvx",
-      "args": ["ffdecmcp"]
+  "mcp": {
+    "servers": {
+      "ffdec": {
+        "type": "local",
+        "command": ["python", "-m", "ffdecmcp"],
+        "environment": { "FFDEC_PATH": "C:\\path\\to\\ffdec.jar" }
+      }
     }
   }
 }
 ```
 
-### Standalone
+### Claude Desktop / generic stdio clients
 
-```bash
-uvx ffdecmcp
-# or against an existing FFDec install
-uvx ffdecmcp --ffdec-path C:\path\to\ffdec.jar
+```json
+{
+  "mcpServers": {
+    "ffdec": {
+      "command": "python",
+      "args": ["-m", "ffdecmcp"],
+      "env": { "FFDEC_PATH": "C:\\path\\to\\ffdec.jar" }
+    }
+  }
+}
 ```
 
 ## Installation
 
 ```bash
-pip install -e ".[dev]"       # development install of this fork
-# or
-uv pip install ffdecmcp       # upstream PyPI (without the extended tools)
+# this fork (not on PyPI):
+pip install "ffdecmcp @ git+https://github.com/an4strawhat/ffdecmcp-ext.git"
+# development install:
+pip install -e ".[dev]"
+# upstream (without the extended tools):
+pip install ffdecmcp
 ```
 
 ### FFDec detection order
@@ -169,19 +192,21 @@ uv pip install ffdecmcp       # upstream PyPI (without the extended tools)
 |---|---|---|
 | `--ffdec-path` | `FFDEC_PATH` | FFDec JAR, native binary, or WSL path |
 | `--timeout` | `FFDEC_TIMEOUT` | Default timeout in seconds (60) |
+| — | `FFDEC_JAR_PATH` | Legacy: checked first when searching for a JAR (`FFDEC_PATH` supersedes it) |
 
 CLI arguments take precedence over environment variables.
 
 ## Development
 
 ```bash
-git clone <this fork>
-cd ffdecmcp
+git clone https://github.com/an4strawhat/ffdecmcp-ext.git
+cd ffdecmcp-ext
 pip install -e ".[dev]"
 python -m pytest tests/          # 25 tests
 ```
 
-The verification scripts live outside the package (`verify_ninja_saga.py`, `verify_air_bundle.py` in the workspace) and exercise every tool against real SWFs, including negative cases.
+Verification against real SWFs (two full suites plus negative cases) was
+performed with dedicated scripts that are kept out of the repository.
 
 ## Performance notes
 
@@ -196,4 +221,6 @@ Timings scale with asset count, not file size alone: a 2.9 MB SWF with 10k+ asse
 
 ## License
 
-MIT (see `LICENSE`). `aircrypto.py` is a port of LGPL-licensed FFDec code.
+MIT — see the `LICENSE` file. Note that `src/ffdecmcp/aircrypto.py` is a Python
+port of FFDec's LGPL-licensed `HarmanSwfEncrypt` and is therefore distributed
+under the GNU LGPL v3; all other code is MIT.

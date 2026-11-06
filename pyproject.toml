@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ffdecmcp"
 version = "0.2.1"
-description = "MCP wrapper for JPEXS Free Flash Decompiler (FFDec) - extended fork with full SWF CLI coverage (decompile, edit, convert) for AI assistants"
+description = "MCP wrapper for JPEXS Free Flash Decompiler (FFDec) - extended fork with full SWF CLI coverage (decompile, edit, convert) for AI assistants. Source install only (not published on PyPI)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    { name = "sublimnl" }
+    { name = "an4strawhat" }
 ]
 keywords = ["mcp", "ffdec", "swf", "flash", "decompiler", "actionscript"]
 classifiers = [
@@ -29,9 +29,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sublimnl/ffdecmcp"
-Repository = "https://github.com/sublimnl/ffdecmcp"
-Issues = "https://github.com/sublimnl/ffdecmcp/issues"
+Homepage = "https://github.com/an4strawhat/ffdecmcp-ext"
+Repository = "https://github.com/an4strawhat/ffdecmcp-ext"
+Issues = "https://github.com/an4strawhat/ffdecmcp-ext/issues"
+Upstream = "https://github.com/sublimnl/ffdecmcp"
 
 [project.optional-dependencies]
 dev = [
