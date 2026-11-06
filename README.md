@@ -1,75 +1,133 @@
-# ffdecmcp
+# ffdecmcp (extended fork)
 
-MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)** - expose SWF decompilation and analysis tools to AI assistants like Claude.
+MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)** — exposes the full FFDec CLI to AI assistants: decompilation, inspection, SWF **editing**, format conversion, and HARMAN Air encryption.
+
+> **Fork notice:** based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). This fork (v0.2.1) adds the 33 missing FFDec commands as tools, fixes several upstream bugs, and implements Air encryption natively in Python.
+
+**39 tools** — all verified against real SWFs (see [Verification](#verification)).
 
 ## Tools
 
-### 1. `decompile_swf`
-Decompile all ActionScript code from a SWF file to organized directory structure.
+### Decompile / analyse
 
-**Parameters:**
-- `swf_path` (required): Absolute path to SWF file
-- `output_dir` (required): Directory for decompiled scripts
-- `timeout` (optional): Timeout in seconds (default: 60)
+| Tool | Description |
+|---|---|
+| `decompile_swf` | Decompile all ActionScript (AS2/AS3) to a directory tree |
+| `extract_actionscript` | Extract specific AS3 classes by name |
+| `list_symbols` | List classes/packages without decompiling |
+| `extract_assets` | Export assets with format/range/zoom control (see [details](#extract_assets-extensions)) |
+| `get_swf_metadata` | Read header: dimensions, version, frame rate, compression |
+| `deobfuscate` | Strip AS3 obfuscation (`traps` / `deadcode` / `max`) |
+| `dump_swf` | Dump all SWF tags (index, name, tagId, length) |
+| `dump_as2` / `dump_as3` | Raw script listings (`-exportNames` supported for AS2) |
+| `link_report` | Generate a linker/dependency XML report |
+| `generate_documentation` | AVM1/AVM2 P-code instruction reference |
 
-### 2. `extract_actionscript`
-Extract specific ActionScript classes by name (AS3 only). Faster than full decompilation when you only need specific classes.
+### Instance metadata (AMF)
 
-**Parameters:**
-- `swf_path` (required): Absolute path to SWF file
-- `class_names` (required): List of class names (e.g., `['com.example.Main']`)
-- `output_dir` (required): Directory for extracted classes
-- `timeout` (optional): Timeout in seconds (default: 60)
+| Tool | Description |
+|---|---|
+| `get_instance_metadata` | Read instance metadata (`jslike`/`raw`) |
+| `set_instance_metadata` | Add/replace instance metadata |
+| `remove_instance_metadata` | Remove instance metadata (all or one key) |
 
-### 3. `list_symbols`
-List all ActionScript classes and symbols in a SWF file. Great for exploring a SWF before full decompilation.
+### Header, compression, encryption
 
-**Parameters:**
-- `swf_path` (required): Absolute path to SWF file
+| Tool | Description |
+|---|---|
+| `set_header` | Print header, or set `version`/`width`/`height`/`framerate`/`framecount`/`displayrect`/`gfx` |
+| `compress_swf` | `compress` (zlib/lzma) or `decompress` |
+| `encrypt_swf` / `decrypt_swf` | HARMAN Air encryption — pure Python, no AIR SDK needed |
 
-**Returns:** Structured JSON with packages, classes, and total count
+### SWF editing (write access)
 
-### 4. `extract_assets`
-Extract images, sounds, fonts, shapes, movie clips, and binary data from SWF.
+| Tool | Description |
+|---|---|
+| `replace_asset` | Replace binaryData/image/shape/text/font/sound tag or AS3 script |
+| `replace_alpha` | Replace JPEG3/JPEG4 alpha channel (image must match dimensions) |
+| `replace_character` | Swap character tags for other characters in the same SWF |
+| `replace_character_ids` | Bulk id replacement, or `pack` / `sort` |
+| `remove_tags` | Remove tags by main-timeline index |
+| `remove_characters` | Remove characters, optionally with dependencies |
+| `import_assets` | Bulk re-import previously exported assets (script/images/sounds/movies/shapes/sprites/text/symbolclass) |
+| `enable_debugging` | Inject debug info / generate SWD |
+| `rename_invalid_identifiers` | Rename invalid identifiers (`typeNumber`/`randomWord`) |
 
-**Parameters:**
-- `swf_path` (required): Absolute path to SWF file
-- `output_dir` (required): Directory for extracted assets
-- `asset_types` (optional): Types to extract - `image`, `sound`, `font`, `shape`, `movie`, `binaryData`, `all` (default: `["all"]`)
-- `timeout` (optional): Timeout in seconds (default: 60)
+### Conversion
 
-### 5. `get_swf_metadata`
-Extract SWF header information (dimensions, frame rate, compression, etc.). Fast and doesn't require decompilation.
+| Tool | Description |
+|---|---|
+| `swf_to_xml` / `xml_to_swf` | Full tag-level XML round-trip (lossless editing path) |
+| `swf_to_exe` | `wrapper`, `projector_win`, `projector_mac`, `projector_linux` |
+| `swf_to_iggy` / `iggy_to_swf` | Scaleform Iggy conversion |
+| `flashpaper_to_pdf` | FlashPaper SWF → PDF |
+| `swf_to_swc` | Generate SWC library |
+| `merge_abc` / `clean_abc` | Merge ABC tags / remove unused ABC items |
 
-**Parameters:**
-- `swf_path` (required): Absolute path to SWF file
+### Utilities
 
-**Returns:** JSON with version, width, height, frame_rate, frame_count, compression
+| Tool | Description |
+|---|---|
+| `extract_swf_files` | Extract SWFs from ZIP/binary files (`all`/`biggest`/`smallest`/`first`/`last`) |
+| `search_memory` | Find SWFs in process memory (names or PIDs) |
+| `run_ffdec` | Generic FFDec CLI passthrough — any command not covered above |
 
-### 6. `deobfuscate`
-Run FFDec's deobfuscation algorithms to remove obfuscation and anti-decompilation tricks.
+### `extract_assets` extensions
 
-**Parameters:**
-- `swf_path` (required): Absolute path to obfuscated SWF
-- `output_path` (required): Path for deobfuscated SWF
-- `level` (optional): Deobfuscation level - `traps`, `deadcode`, `max` (default: `max`)
-- `timeout` (optional): Timeout in seconds (default: 60)
+Besides the original `image`, `sound`, `font`, `shape`, `movie`, `binaryData`, `all`, the tool now accepts `text`, `frame`, `sprite`, `button`, `morphshape`, `font4`, `symbolClass`, `fla`, `xfl`, and supports:
+
+- `formats` — e.g. `["script:pcode", "shape:svg", "frame:png", "image:webp"]`
+- `select` / `select_ids` — frame ranges / character ranges
+- `zoom`, `ignore_background`, `onerror` (+ retries), `export_timeout`
+
+## FFDec quirks found (and how this fork handles them)
+
+| Quirk | Handling |
+|---|---|
+| **`-encrypt` CLI is broken in FFDec 26.4.0** (and current master): the dispatcher calls `parseDecrypt` for both `encrypt` and `decrypt`, so `-encrypt` always decrypts and returns `FAIL` | `encrypt_swf`/`decrypt_swf` are implemented in Python (`aircrypto.py`, exact port of FFDec's `HarmanSwfEncrypt`). Encrypt self-verifies by decrypting in memory before writing |
+| `-compress` requires the **method before the paths** (`-compress zlib in out`) although its help says the opposite; without a method it misparses silently | `compress_swf` always passes the method (default `zlib`) |
+| FFDec can exit **0 while writing a 0-byte output** | File-producing commands verify existence **and** non-empty size |
+| `-importSymbolClass` appends `symbols.csv` to the argument | `import_assets(symbolclass)` takes the **folder** containing `symbols.csv` |
+| `-replaceAlpha` fails with `I/O error` unless the alpha image exactly matches the JPEG dimensions | Documented; tests generate a dimension-matched RGBA PNG |
+| `-dumpAS3` prints `ClassName index` — upstream `list_symbols` parser expected `class X` and returned 0 classes | Parser rewritten for the real formats (AS3 + legacy AS2) |
+| Multiple `-export` flags don't accumulate | Asset types are sent as one comma-separated list |
+| `projector_*` export needs a Flash Player projector in `%APPDATA%\JPEXS\FFDec\projector` | Download `flashplayer_32_sa.exe` there, or use `wrapper` mode (no projector needed) |
+| `flashpaper_to_pdf` refuses non-FlashPaper SWFs | Expected; error is surfaced clearly |
+
+## Verification
+
+Tested against real files with FFDec 26.4.0 on Windows 11, Java 25, plus **25 unit tests** (`pytest`).
+
+### Suite 1 — single-player game SWF (2.89 MB, AS3, 305 classes, 20,130 tags)
+
+**47/47 passed, 0 skipped, 0 failed**, run twice from scratch. Covered: all analysis tools (10,131 assets exported, 76.9 MB XML round-trip), every conversion (Iggy, SWC, exe wrapper + 18 MB projector build, HARMAN Air round-trip), every edit op (image/alpha/character replace, tag/character removal, image + SymbolClass import), instance-metadata calls, memory search, and MCP-layer delegation.
+
+### Suite 2 — multiplayer AIR bundle (4,740 SWFs + AIR SDK 51.1.3)
+
+**66 passed / 1 skipped (no JPEG3/4 in target) / 0 failed.**
+Primary target: a 453 KB base-actions module (70 classes): full battery including 1,207 asset exports, XML round-trip, both exe modes, shape + SymbolClass re-import.
+Section scans passed on the core multiplayer client files: the main asset library (937 classes), the code library (223), the networking library (139), the menu (195), a popup framework (119), a map asset (48) and a social-connector module (25). Decompiling the networking library surfaced the live endpoints.
+
+### Air crypto interoperability (three-way)
+
+1. Our encrypted output → **FFDec native decryptor** → byte-identical to original
+2. Our encrypt → our decrypt → identical, including all padding edge cases (0–70+ byte bodies)
+3. **AIR SDK `swfencrypt`** output → our `decrypt_swf` → byte-identical
+4. Re-encrypt and decrypt-plain cases are rejected with clear errors
+
+Notes from testing: all 4,740 bundled SWFs were plain `CWS`/`ZWS2` (none pre-encrypted); shape-based SWFs export PNGs under `shapes/`, so `import_assets(shapes)` is the correct round-trip there; instance-metadata tools are wiring-tested via unknown-instance calls because the samples contain no named `PlaceObject` instances.
 
 ## Quick Start
 
-**Prerequisites:** Python 3.10+ and Java (for running the FFDec JAR).
+**Prerequisites:** Python 3.10+, Java (for FFDec). No AIR SDK required.
 
 ### Claude Code
 
 ```bash
-claude mcp add ffdecmcp -- uvx ffdecmcp
+claude mcp add ffdecmcp -- uvx --from . ffdecmcp
 ```
 
-That's it. On first run, FFDec will be auto-downloaded if not already installed.
-
 ### Claude Desktop
-
-Add to your config file (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
 
 ```json
 {
@@ -85,79 +143,57 @@ Add to your config file (`~/Library/Application Support/Claude/claude_desktop_co
 ### Standalone
 
 ```bash
-# Just run it - FFDec will be auto-downloaded to ~/.ffdecmcp/ if needed
 uvx ffdecmcp
-
-# Or point to an existing FFDec installation
-uvx ffdecmcp --ffdec-path /path/to/ffdec.jar
+# or against an existing FFDec install
+uvx ffdecmcp --ffdec-path C:\path\to\ffdec.jar
 ```
 
 ## Installation
 
-No installation is required when using `uvx`. For a permanent install:
-
 ```bash
-uv pip install ffdecmcp
+pip install -e ".[dev]"       # development install of this fork
 # or
-pip install ffdecmcp
+uv pip install ffdecmcp       # upstream PyPI (without the extended tools)
 ```
 
-### FFDec
+### FFDec detection order
 
-FFDec is automatically downloaded on first run if not found. You can also install it manually.
-
-The server finds FFDec in this order:
-
-1. `--ffdec-path` CLI arg / `FFDEC_PATH` env var
+1. `--ffdec-path` / `FFDEC_PATH`
 2. Previously auto-downloaded JAR (`~/.ffdecmcp/ffdec.jar`)
-3. Common install locations and PATH
-5. Auto-download from GitHub
+3. Common install locations / `PATH`
+4. Auto-download from GitHub releases
 
-### CLI Options
-
-```
-ffdecmcp [--ffdec-path PATH] [--timeout SECONDS]
-```
+### CLI options
 
 | Option | Env Var | Description |
 |---|---|---|
-| `--ffdec-path` | `FFDEC_PATH` | Path to FFDec (JAR, native binary, or WSL path) |
-| `--timeout` | `FFDEC_TIMEOUT` | Default timeout in seconds (default: 60) |
+| `--ffdec-path` | `FFDEC_PATH` | FFDec JAR, native binary, or WSL path |
+| `--timeout` | `FFDEC_TIMEOUT` | Default timeout in seconds (60) |
 
 CLI arguments take precedence over environment variables.
 
-### Development
+## Development
 
 ```bash
-git clone https://github.com/sublimnl/ffdecmcp.git
+git clone <this fork>
 cd ffdecmcp
-uv pip install -e ".[dev]"
+pip install -e ".[dev]"
+python -m pytest tests/          # 25 tests
 ```
 
-### Example Usage in Claude
+The verification scripts live outside the package (`verify_ninja_saga.py`, `verify_air_bundle.py` in the workspace) and exercise every tool against real SWFs, including negative cases.
 
-```
-You: Can you analyze this SWF file for me?
-Path: C:\Users\foo\game.swf
+## Performance notes
 
-Claude will:
-1. Use get_swf_metadata to check dimensions, version, etc.
-2. Use list_symbols to see what classes are present
-3. Use decompile_swf to extract all ActionScript code
-4. Analyze the decompiled code and provide insights
-```
+Timings scale with asset count, not file size alone: a 2.9 MB SWF with 10k+ assets took ~5.7 min for `extract_assets(all)`; a 453 KB shape-heavy SWF with 1.2k assets took ~1.8 min. Everything else (decompile, conversions, edits, encryption) is seconds. Use `select`/`select_ids` and per-call `timeout` to bound large jobs.
 
 ## References
 
 - **FFDec**: https://github.com/jindrapetrik/jpexs-decompiler
-- **FFDec CLI Docs**: https://github.com/jindrapetrik/jpexs-decompiler/wiki/Commandline-arguments
-- **Model Context Protocol**: https://modelcontextprotocol.io
-- **FastMCP**: https://github.com/jlowin/fastmcp
+- **FFDec CLI docs**: https://github.com/jindrapetrik/jpexs-decompiler/wiki/Commandline-arguments
+- **Air crypto reference**: FFDec `HarmanSwfEncrypt` (LGPL), based on `swfdecrypt.py` by NathaanTFM
+- **MCP**: https://modelcontextprotocol.io
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Contributing
-
-Contributions welcome! Please open an issue or PR on GitHub.
+MIT (see `LICENSE`). `aircrypto.py` is a port of LGPL-licensed FFDec code.
