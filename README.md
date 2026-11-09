@@ -2,7 +2,7 @@
 
 MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)** — exposes the full FFDec CLI to AI assistants: decompilation, inspection, SWF **editing**, format conversion, and HARMAN Air encryption.
 
-> **Fork notice:** maintained at [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext), based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). **Not published on PyPI** — install from git (see [Quick Start](#quick-start)). This fork (v0.2.1) adds the 33 missing FFDec commands as tools, fixes several upstream bugs, and implements Air encryption natively in Python.
+> **Fork notice:** maintained at [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext), based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). **Not published on PyPI** — install from git (see [Quick Start](#quick-start)). This fork (v0.2.2) adds the 33 missing FFDec commands as tools, fixes several upstream bugs, and implements Air encryption natively in Python.
 
 **39 tools** — all verified against real SWFs (see [Verification](#verification)).
 
@@ -93,6 +93,7 @@ Besides the original `image`, `sound`, `font`, `shape`, `movie`, `binaryData`, `
 | Multiple `-export` flags don't accumulate | Asset types are sent as one comma-separated list |
 | `projector_*` export needs a Flash Player projector in `%APPDATA%\JPEXS\FFDec\projector` | Download `flashplayer_32_sa.exe` there, or use `wrapper` mode (no projector needed) |
 | `flashpaper_to_pdf` refuses non-FlashPaper SWFs | Expected; error is surfaced clearly |
+| Large text outputs can exceed MCP transport limits (OpenCode caps a single stdio message at 16 MiB — a multi-MB tag dump kills the connection) | Text tools (`dump_swf`, `dump_as2`/`dump_as3`, `link_report`, `generate_documentation`, `run_ffdec`) clip responses to `max_chars` (default 250,000) and accept `outfile=` to save the complete output to disk |
 
 ## Verification
 

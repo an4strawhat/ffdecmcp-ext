@@ -34,6 +34,24 @@ class FFDecExecutionError(FFDecError):
     pass
 
 
+def _clip_text(text: str, max_chars: int) -> tuple[str, dict[str, Any]]:
+    """
+    Clip a text output for transport-safe MCP responses.
+
+    MCP stdio transports typically cap a single message (OpenCode: 16 MiB);
+    very large tool outputs must be clipped. max_chars <= 0 disables clipping.
+
+    Returns:
+        Tuple of (clipped_text, info_fields) where info_fields carries
+        total_chars and truncated.
+    """
+    info: dict[str, Any] = {"total_chars": len(text), "truncated": False}
+    if max_chars and max_chars > 0 and len(text) > max_chars:
+        info["truncated"] = True
+        return text[:max_chars], info
+    return text, info
+
+
 class FFDecWrapper:
     """Wrapper for executing FFDec commands."""
 
@@ -781,13 +799,26 @@ class FFDecWrapper:
     # Inspection commands (console output)
     # ------------------------------------------------------------------
 
-    def dump_swf(self, swf_path: str, timeout: Optional[int] = None) -> dict[str, Any]:
+    def dump_swf(
+        self,
+        swf_path: str,
+        timeout: Optional[int] = None,
+        outfile: Optional[str] = None,
+        max_chars: int = 250_000,
+    ) -> dict[str, Any]:
         """
         Dump the list of SWF tags to console output.
+
+        The response is clipped to `max_chars` so it stays within MCP
+        transport message limits; pass `outfile` to also save the complete
+        dump to disk.
 
         Args:
             swf_path: Path to SWF file
             timeout: Timeout in seconds
+            outfile: Optional path to save the full tag dump
+            max_chars: Maximum characters returned in the response
+                (0 disables clipping)
 
         Returns:
             Result dictionary with the tag dump
@@ -800,23 +831,51 @@ class FFDecWrapper:
         out = self._run_capture(
             ["-dumpSWF", swf_norm], timeout=timeout, check_returncode=False
         )
-        return {
+        tag_dump, clip = _clip_text(out["stdout"], max_chars)
+        result: dict[str, Any] = {
             "success": True,
             "swf_path": swf_path,
-            "tag_dump": out["stdout"],
-            "message": "Successfully dumped SWF tags",
+            "tag_dump": tag_dump,
+            **clip,
         }
+        if outfile:
+            self._ensure_output_parent(outfile)
+            Path(outfile).write_text(out["stdout"], encoding="utf-8", errors="replace")
+            result["full_dump_path"] = outfile
+        if clip["truncated"]:
+            result["message"] = (
+                f"Tag dump clipped to {max_chars} of {clip['total_chars']} characters"
+                + (
+                    f"; full dump saved to {outfile}"
+                    if outfile
+                    else "; pass outfile= to save the full dump"
+                )
+            )
+        else:
+            result["message"] = "Successfully dumped SWF tags"
+        return result
 
     def dump_as2(
-        self, swf_path: str, export_names: bool = False, timeout: Optional[int] = None
+        self,
+        swf_path: str,
+        export_names: bool = False,
+        timeout: Optional[int] = None,
+        outfile: Optional[str] = None,
+        max_chars: int = 250_000,
     ) -> dict[str, Any]:
         """
         Dump the list of AS1/AS2 scripts to console output.
+
+        The response is clipped to `max_chars`; pass `outfile` to also save
+        the complete dump to disk.
 
         Args:
             swf_path: Path to SWF file
             export_names: Use -exportNames to print names in export format
             timeout: Timeout in seconds
+            outfile: Optional path to save the full script dump
+            max_chars: Maximum characters returned in the response
+                (0 disables clipping)
 
         Returns:
             Result dictionary with the script dump
@@ -832,20 +891,49 @@ class FFDecWrapper:
         args.append(swf_norm)
 
         out = self._run_capture(args, timeout=timeout, check_returncode=False)
-        return {
+        script_dump, clip = _clip_text(out["stdout"], max_chars)
+        result: dict[str, Any] = {
             "success": True,
             "swf_path": swf_path,
-            "script_dump": out["stdout"],
-            "message": "Successfully dumped AS1/AS2 scripts",
+            "script_dump": script_dump,
+            **clip,
         }
+        if outfile:
+            self._ensure_output_parent(outfile)
+            Path(outfile).write_text(out["stdout"], encoding="utf-8", errors="replace")
+            result["full_dump_path"] = outfile
+        if clip["truncated"]:
+            result["message"] = (
+                f"Script dump clipped to {max_chars} of {clip['total_chars']} characters"
+                + (
+                    f"; full dump saved to {outfile}"
+                    if outfile
+                    else "; pass outfile= to save the full dump"
+                )
+            )
+        else:
+            result["message"] = "Successfully dumped AS1/AS2 scripts"
+        return result
 
-    def dump_as3(self, swf_path: str, timeout: Optional[int] = None) -> dict[str, Any]:
+    def dump_as3(
+        self,
+        swf_path: str,
+        timeout: Optional[int] = None,
+        outfile: Optional[str] = None,
+        max_chars: int = 250_000,
+    ) -> dict[str, Any]:
         """
         Dump the list of AS3 scripts to console output.
+
+        The response is clipped to `max_chars`; pass `outfile` to also save
+        the complete dump to disk.
 
         Args:
             swf_path: Path to SWF file
             timeout: Timeout in seconds
+            outfile: Optional path to save the full script dump
+            max_chars: Maximum characters returned in the response
+                (0 disables clipping)
 
         Returns:
             Result dictionary with the script dump
@@ -858,26 +946,49 @@ class FFDecWrapper:
         out = self._run_capture(
             ["-dumpAS3", swf_norm], timeout=timeout, check_returncode=False
         )
-        return {
+        script_dump, clip = _clip_text(out["stdout"], max_chars)
+        result: dict[str, Any] = {
             "success": True,
             "swf_path": swf_path,
-            "script_dump": out["stdout"],
-            "message": "Successfully dumped AS3 scripts",
+            "script_dump": script_dump,
+            **clip,
         }
+        if outfile:
+            self._ensure_output_parent(outfile)
+            Path(outfile).write_text(out["stdout"], encoding="utf-8", errors="replace")
+            result["full_dump_path"] = outfile
+        if clip["truncated"]:
+            result["message"] = (
+                f"Script dump clipped to {max_chars} of {clip['total_chars']} characters"
+                + (
+                    f"; full dump saved to {outfile}"
+                    if outfile
+                    else "; pass outfile= to save the full dump"
+                )
+            )
+        else:
+            result["message"] = "Successfully dumped AS3 scripts"
+        return result
 
     def link_report(
         self,
         swf_path: str,
         outfile: Optional[str] = None,
         timeout: Optional[int] = None,
+        max_chars: int = 250_000,
     ) -> dict[str, Any]:
         """
         Generate a linker report for a SWF file.
+
+        The text response is clipped to `max_chars`; pass `outfile` to save
+        the full report to disk.
 
         Args:
             swf_path: Path to SWF file
             outfile: Optional path to save the XML report to (stdout when omitted)
             timeout: Timeout in seconds
+            max_chars: Maximum characters returned in the response
+                (0 disables clipping)
 
         Returns:
             Result dictionary with the report text or file path
@@ -899,8 +1010,18 @@ class FFDecWrapper:
             result["report_path"] = outfile
             result["message"] = f"Linker report saved to {outfile}"
         else:
-            result["report"] = out["stdout"]
-            result["message"] = "Linker report generated"
+            report, clip = _clip_text(out["stdout"], max_chars)
+            result["report"] = report
+            result.update(clip)
+            result["message"] = (
+                (
+                    f"Linker report clipped to {max_chars} of "
+                    f"{clip['total_chars']} characters; pass outfile= to save "
+                    "the full report"
+                )
+                if clip["truncated"]
+                else "Linker report generated"
+            )
         return result
 
     def generate_documentation(
@@ -910,9 +1031,13 @@ class FFDecWrapper:
         format: Optional[str] = "html",
         locale: Optional[str] = None,
         timeout: Optional[int] = None,
+        max_chars: int = 250_000,
     ) -> dict[str, Any]:
         """
         Generate documentation (AVM instruction lists).
+
+        The text response is clipped to `max_chars`; pass `outfile` to save
+        the full documentation to disk.
 
         Args:
             doc_type: Documentation type: as3.pcode.instructions or
@@ -921,6 +1046,8 @@ class FFDecWrapper:
             format: Output format (currently only html)
             locale: Optional locale override (e.g. "en")
             timeout: Timeout in seconds
+            max_chars: Maximum characters returned in the response
+                (0 disables clipping)
 
         Returns:
             Result dictionary with the documentation text or file path
@@ -948,8 +1075,18 @@ class FFDecWrapper:
             result["doc_path"] = outfile
             result["message"] = f"Documentation saved to {outfile}"
         else:
-            result["documentation"] = out["stdout"]
-            result["message"] = "Documentation generated"
+            documentation, clip = _clip_text(out["stdout"], max_chars)
+            result["documentation"] = documentation
+            result.update(clip)
+            result["message"] = (
+                (
+                    f"Documentation clipped to {max_chars} of "
+                    f"{clip['total_chars']} characters; pass outfile= to save "
+                    "the full documentation"
+                )
+                if clip["truncated"]
+                else "Documentation generated"
+            )
         return result
 
     # ------------------------------------------------------------------
@@ -2222,15 +2359,25 @@ class FFDecWrapper:
         }
 
     def run_ffdec(
-        self, args: list[str], timeout: Optional[int] = None
+        self,
+        args: list[str],
+        timeout: Optional[int] = None,
+        outfile: Optional[str] = None,
+        max_chars: int = 250_000,
     ) -> dict[str, Any]:
         """
         Run FFDec with arbitrary command-line arguments (generic passthrough).
+
+        The stdout response is clipped to `max_chars`; pass `outfile` to also
+        save the complete stdout to disk.
 
         Args:
             args: FFDec command-line arguments
                 (e.g. ["-listconfigs"] or ["-dumpSWF", "/path/file.swf"])
             timeout: Timeout in seconds
+            outfile: Optional path to save the full stdout
+            max_chars: Maximum characters of stdout returned in the response
+                (0 disables clipping)
 
         Returns:
             Result dictionary with stdout, stderr and returncode
@@ -2241,11 +2388,28 @@ class FFDecWrapper:
         out = self._run_capture(
             [str(a) for a in args], timeout=timeout, check_returncode=False
         )
-        return {
+        stdout, clip = _clip_text(out["stdout"], max_chars)
+        result: dict[str, Any] = {
             "success": True,
             "args": args,
-            "stdout": out["stdout"],
+            "stdout": stdout,
             "stderr": out["stderr"],
             "returncode": out["returncode"],
-            "message": "FFDec executed",
+            **clip,
         }
+        if outfile:
+            self._ensure_output_parent(outfile)
+            Path(outfile).write_text(out["stdout"], encoding="utf-8", errors="replace")
+            result["full_output_path"] = outfile
+        if clip["truncated"]:
+            result["message"] = (
+                f"stdout clipped to {max_chars} of {clip['total_chars']} characters"
+                + (
+                    f"; full output saved to {outfile}"
+                    if outfile
+                    else "; pass outfile= to save the full output"
+                )
+            )
+        else:
+            result["message"] = "FFDec executed"
+        return result

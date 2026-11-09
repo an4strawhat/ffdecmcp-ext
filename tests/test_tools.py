@@ -163,3 +163,20 @@ class TestExtendedTools:
         )
         assert result["success"] is False
         assert "Invalid asset types" in result["error"]
+
+    def test_dump_swf_accepts_clip_params(self, tmp_path):
+        """dump_swf wires outfile/max_chars through (missing file errors first)."""
+        result = call_tool(
+            dump_swf,
+            str(tmp_path / "missing.swf"),
+            outfile=str(tmp_path / "dump.txt"),
+            max_chars=1000,
+        )
+        assert result["success"] is False
+        assert "does not exist" in result["error"]
+
+    def test_run_ffdec_accepts_clip_params(self):
+        """run_ffdec wires outfile/max_chars through (empty args errors first)."""
+        result = call_tool(run_ffdec, [], outfile="out.txt", max_chars=1000)
+        assert result["success"] is False
+        assert "No arguments" in result["error"]

@@ -430,27 +430,39 @@ def deobfuscate(
 
 
 @mcp.tool()
-def dump_swf(swf_path: str, timeout: Optional[int] = None) -> dict[str, Any]:
+def dump_swf(
+    swf_path: str,
+    timeout: Optional[int] = None,
+    outfile: Optional[str] = None,
+    max_chars: int = 250_000,
+) -> dict[str, Any]:
     """
     Dump the list of all SWF tags to console output.
 
     This tool lists every tag in the SWF file (tag code, name, index), which is
     useful for inspecting the internal structure of a SWF before editing.
+    Large dumps are clipped to `max_chars` so responses stay within MCP
+    transport message limits; pass `outfile` to save the complete dump.
 
     Args:
         swf_path: Absolute path to the SWF file
         timeout: Optional timeout in seconds (default: 60)
+        outfile: Optional path to save the full tag dump to disk
+        max_chars: Maximum characters returned in the response
+            (default: 250000, 0 disables clipping)
 
     Returns:
         Dictionary with:
         - success: Whether the dump succeeded
         - swf_path: Input SWF file path
-        - tag_dump: The full tag listing text
+        - tag_dump: The tag listing text (clipped if truncated)
+        - total_chars / truncated: Clipping info
+        - full_dump_path: Path of the saved full dump (when outfile is provided)
         - message: Success message
     """
     try:
         logger.info(f"Dumping SWF tags: {swf_path}")
-        return get_ffdec().dump_swf(swf_path, timeout)
+        return get_ffdec().dump_swf(swf_path, timeout, outfile, max_chars)
     except FFDecError as e:
         logger.error(f"SWF tag dump failed: {e}")
         return {
@@ -469,27 +481,39 @@ def dump_swf(swf_path: str, timeout: Optional[int] = None) -> dict[str, Any]:
 
 @mcp.tool()
 def dump_as2(
-    swf_path: str, export_names: bool = False, timeout: Optional[int] = None
+    swf_path: str,
+    export_names: bool = False,
+    timeout: Optional[int] = None,
+    outfile: Optional[str] = None,
+    max_chars: int = 250_000,
 ) -> dict[str, Any]:
     """
     Dump the raw list of AS1/AS2 scripts from a SWF file.
+
+    Large dumps are clipped to `max_chars`; pass `outfile` to save the
+    complete dump.
 
     Args:
         swf_path: Absolute path to the SWF file
         export_names: If True, print names in the export format used by
             replace/import commands
         timeout: Optional timeout in seconds (default: 60)
+        outfile: Optional path to save the full script dump to disk
+        max_chars: Maximum characters returned in the response
+            (default: 250000, 0 disables clipping)
 
     Returns:
         Dictionary with:
         - success: Whether the dump succeeded
         - swf_path: Input SWF file path
-        - script_dump: The raw AS1/AS2 script listing text
+        - script_dump: The raw AS1/AS2 script listing text (clipped if truncated)
+        - total_chars / truncated: Clipping info
+        - full_dump_path: Path of the saved full dump (when outfile is provided)
         - message: Success message
     """
     try:
         logger.info(f"Dumping AS2 scripts: {swf_path}")
-        return get_ffdec().dump_as2(swf_path, export_names, timeout)
+        return get_ffdec().dump_as2(swf_path, export_names, timeout, outfile, max_chars)
     except FFDecError as e:
         logger.error(f"AS2 script dump failed: {e}")
         return {
@@ -507,24 +531,37 @@ def dump_as2(
 
 
 @mcp.tool()
-def dump_as3(swf_path: str, timeout: Optional[int] = None) -> dict[str, Any]:
+def dump_as3(
+    swf_path: str,
+    timeout: Optional[int] = None,
+    outfile: Optional[str] = None,
+    max_chars: int = 250_000,
+) -> dict[str, Any]:
     """
     Dump the raw list of AS3 scripts from a SWF file.
+
+    Large dumps are clipped to `max_chars`; pass `outfile` to save the
+    complete dump.
 
     Args:
         swf_path: Absolute path to the SWF file
         timeout: Optional timeout in seconds (default: 60)
+        outfile: Optional path to save the full script dump to disk
+        max_chars: Maximum characters returned in the response
+            (default: 250000, 0 disables clipping)
 
     Returns:
         Dictionary with:
         - success: Whether the dump succeeded
         - swf_path: Input SWF file path
-        - script_dump: The raw AS3 script listing text
+        - script_dump: The raw AS3 script listing text (clipped if truncated)
+        - total_chars / truncated: Clipping info
+        - full_dump_path: Path of the saved full dump (when outfile is provided)
         - message: Success message
     """
     try:
         logger.info(f"Dumping AS3 scripts: {swf_path}")
-        return get_ffdec().dump_as3(swf_path, timeout)
+        return get_ffdec().dump_as3(swf_path, timeout, outfile, max_chars)
     except FFDecError as e:
         logger.error(f"AS3 script dump failed: {e}")
         return {
@@ -543,28 +580,36 @@ def dump_as3(swf_path: str, timeout: Optional[int] = None) -> dict[str, Any]:
 
 @mcp.tool()
 def link_report(
-    swf_path: str, outfile: Optional[str] = None, timeout: Optional[int] = None
+    swf_path: str,
+    outfile: Optional[str] = None,
+    timeout: Optional[int] = None,
+    max_chars: int = 250_000,
 ) -> dict[str, Any]:
     """
     Generate a linker report for a SWF file.
+
+    The text response is clipped to `max_chars` when no `outfile` is given.
 
     Args:
         swf_path: Absolute path to the SWF file
         outfile: Optional path to save the XML report to. When omitted, the
             report text is returned directly
         timeout: Optional timeout in seconds (default: 60)
+        max_chars: Maximum characters returned in the response
+            (default: 250000, 0 disables clipping)
 
     Returns:
         Dictionary with:
         - success: Whether the report generation succeeded
         - swf_path: Input SWF file path
-        - report: Report text (when outfile is omitted)
+        - report: Report text (when outfile is omitted, clipped if truncated)
+        - total_chars / truncated: Clipping info (when outfile is omitted)
         - report_path: Report file path (when outfile is provided)
         - message: Success message
     """
     try:
         logger.info(f"Generating linker report: {swf_path}")
-        return get_ffdec().link_report(swf_path, outfile, timeout)
+        return get_ffdec().link_report(swf_path, outfile, timeout, max_chars)
     except FFDecError as e:
         logger.error(f"Linker report failed: {e}")
         return {
@@ -588,9 +633,12 @@ def generate_documentation(
     format: Optional[str] = "html",
     locale: Optional[str] = None,
     timeout: Optional[int] = None,
+    max_chars: int = 250_000,
 ) -> dict[str, Any]:
     """
     Generate documentation listing AVM instructions.
+
+    The text response is clipped to `max_chars` when no `outfile` is given.
 
     Args:
         doc_type: Documentation type: 'as3.pcode.instructions' (AVM2) or
@@ -600,18 +648,24 @@ def generate_documentation(
         format: Output format (currently only 'html')
         locale: Optional locale override (e.g. 'en')
         timeout: Optional timeout in seconds (default: 60)
+        max_chars: Maximum characters returned in the response
+            (default: 250000, 0 disables clipping)
 
     Returns:
         Dictionary with:
         - success: Whether documentation generation succeeded
         - doc_type: The requested documentation type
-        - documentation: Documentation text (when outfile is omitted)
+        - documentation: Documentation text (when outfile is omitted,
+            clipped if truncated)
+        - total_chars / truncated: Clipping info (when outfile is omitted)
         - doc_path: Documentation file path (when outfile is provided)
         - message: Success message
     """
     try:
         logger.info(f"Generating documentation: {doc_type}")
-        return get_ffdec().generate_documentation(doc_type, outfile, format, locale, timeout)
+        return get_ffdec().generate_documentation(
+            doc_type, outfile, format, locale, timeout, max_chars
+        )
     except FFDecError as e:
         logger.error(f"Documentation generation failed: {e}")
         return {
@@ -1892,30 +1946,42 @@ def search_memory(
 
 
 @mcp.tool()
-def run_ffdec(args: list[str], timeout: Optional[int] = None) -> dict[str, Any]:
+def run_ffdec(
+    args: list[str],
+    timeout: Optional[int] = None,
+    outfile: Optional[str] = None,
+    max_chars: int = 250_000,
+) -> dict[str, Any]:
     """
     Run FFDec with arbitrary command-line arguments (generic passthrough).
 
     Use this for any FFDec CLI capability not covered by a dedicated tool,
     e.g. ["-listconfigs"], ["-config", "decompileStatistic=true", "-dumpSWF",
     "C:/file.swf"], or ["-storeConfigFile", "config.toml"].
+    Large stdout is clipped to `max_chars`; pass `outfile` to save the
+    complete stdout.
 
     Args:
         args: FFDec command-line arguments (without the executable itself)
         timeout: Optional timeout in seconds (default: 60)
+        outfile: Optional path to save the full stdout to disk
+        max_chars: Maximum characters of stdout returned in the response
+            (default: 250000, 0 disables clipping)
 
     Returns:
         Dictionary with:
         - success: Whether execution completed
         - args: The arguments used
-        - stdout: Standard output
+        - stdout: Standard output (clipped if truncated)
         - stderr: Standard error
         - returncode: Process exit code
+        - total_chars / truncated: Clipping info
+        - full_output_path: Path of the saved full stdout (when outfile provided)
         - message: Success message
     """
     try:
         logger.info(f"Running FFDec with args: {args}")
-        return get_ffdec().run_ffdec(args, timeout)
+        return get_ffdec().run_ffdec(args, timeout, outfile, max_chars)
     except FFDecError as e:
         logger.error(f"FFDec execution failed: {e}")
         return {
