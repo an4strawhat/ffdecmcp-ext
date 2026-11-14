@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ffdecmcp"
-version = "0.2.2"
+version = "0.3.0"
 description = "MCP wrapper for JPEXS Free Flash Decompiler (FFDec) - extended fork with full SWF CLI coverage (decompile, edit, convert) for AI assistants. Source install only (not published on PyPI)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,4 +47,4 @@ ffdecmcp = "ffdecmcp.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ffdecmcp = ["py.typed"]
+ffdecmcp = ["py.typed", "java/*.java"]

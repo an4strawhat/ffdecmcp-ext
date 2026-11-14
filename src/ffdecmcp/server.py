@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 # Initialize FastMCP server
 mcp = FastMCP("ffdecmcp")
 
+# Independent library-backed layer; existing CLI tools retain their behavior.
+from .inspection_tools import register_inspection_tools
+register_inspection_tools(mcp)
+
 # Lazy-initialized FFDec wrapper (config must be ready before first tool call)
 _ffdec: Optional[FFDecWrapper] = None
 

@@ -2,9 +2,9 @@
 
 MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)** — exposes the full FFDec CLI to AI assistants: decompilation, inspection, SWF **editing**, format conversion, and HARMAN Air encryption.
 
-> **Fork notice:** maintained at [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext), based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). **Not published on PyPI** — install from git (see [Quick Start](#quick-start)). This fork (v0.2.2) adds the 33 missing FFDec commands as tools, fixes several upstream bugs, and implements Air encryption natively in Python.
+> **Fork notice:** maintained at [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext), based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). **Not published on PyPI** — install from git (see [Quick Start](#quick-start)). This fork (v0.3.0) adds the 33 missing FFDec commands as tools, fixes several upstream bugs, implements Air encryption natively in Python, and adds a library-backed read-only AVM2 inspection layer.
 
-**39 tools** — all verified against real SWFs (see [Verification](#verification)).
+**42 tools** — all verified against real SWFs (see [Verification](#verification)).
 
 ## Tools
 
@@ -22,6 +22,33 @@ MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)**
 | `dump_as2` / `dump_as3` | Raw script listings (`-exportNames` supported for AS2) |
 | `link_report` | Generate a linker/dependency XML report |
 | `generate_documentation` | AVM1/AVM2 P-code instruction reference |
+
+### AVM2 inspection (read-only, library-backed)
+
+These three tools call the **FFDec Java library directly** — no CLI, no export
+files, no SWF modification:
+
+| Tool | Description |
+|---|---|
+| `list_avm2_classes` | Class identities, superclasses, interfaces, instance/static initializer IDs |
+| `inspect_avm2_method` | Method signature, direct/enclosing owners, exception table, decoded instructions |
+| `find_avm2_property_accesses` | Property reads/writes (`get/setproperty`, `get/setsuper`, `initproperty`, `get/setslot`, `get/setglobalslot`) with containing methods, lexical contexts and bytecode offsets |
+
+**Requirements:** Java 17+ **JDK** (the bridge uses the Java source-file
+launcher), FFDec **26.4.0** JAR via `FFDEC_PATH`, FWS/CWS input ≤64 MiB.
+Other signatures are rejected with an explicit error.
+
+**Bounded responses:** every response is limited by `max_bytes` (default 64 KiB)
+with cursor pagination — continue with `next_offset` as `offset` and the
+returned `sha256` as `expected_sha256`, keeping other parameters unchanged.
+Pagination is rejected if the file changes. Errors return structured
+`success:false` results without disconnecting.
+
+**Explicit uncertainties (never guessed):** `receiver_type` is always `null`
+(containing class ≠ receiver type); runtime-computed property names and
+unresolved slot IDs are reported as such; `enclosing_contexts` follow
+`newfunction` lexical chains and are not proof of unique ownership or runtime
+execution; container validation is not full ABC verification.
 
 ### Instance metadata (AMF)
 
@@ -97,7 +124,7 @@ Besides the original `image`, `sound`, `font`, `shape`, `movie`, `binaryData`, `
 
 ## Verification
 
-Tested against real files with FFDec 26.4.0 on Windows 11, Java 25, plus **25 unit tests** (`pytest`).
+Tested against real files with FFDec 26.4.0 on Windows 11, Java 25, plus **43 unit tests** (`pytest`; Java-bridge tests opt in via `FFDEC_TEST_JAR`).
 
 ### Suite 1 — single-player game SWF (2.89 MB, AS3, 305 classes, 20,130 tags)
 
@@ -116,11 +143,26 @@ Section scans passed on the core multiplayer client files: the main asset librar
 3. **AIR SDK `swfencrypt`** output → our `decrypt_swf` → byte-identical
 4. Re-encrypt and decrypt-plain cases are rejected with clear errors
 
+### AVM2 inspection layer evidence
+
+Validated with synthetic ABC fixtures (exact property-write → method ID, class
+trait, multiname and bytecode offset; initializer IDs; runtime-name and slot
+cases; controlled single-method comparisons) and three representative real
+assets: **14,272 of 14,296 property writes** resolved to direct method owners,
+the remainder reported as unresolved lexical contexts. In-memory SymbolClass
+linkage matched CSV exports, including document-class character ID 0. Input
+SHA-256s stayed unchanged and inspection created no export files. An opt-in
+strict SWF preflight rejects malformed containers (including a truncated file
+that FFDec itself accepted). Details and reproducible scripts:
+`tests/prototypes/README.md`.
+
 Notes from testing: all 4,740 bundled SWFs were plain `CWS`/`ZWS2` (none pre-encrypted); shape-based SWFs export PNGs under `shapes/`, so `import_assets(shapes)` is the correct round-trip there; instance-metadata tools are wiring-tested via unknown-instance calls because the samples contain no named `PlaceObject` instances.
 
 ## Quick Start
 
 **Prerequisites:** Python 3.10+, Java (for FFDec). No AIR SDK required.
+The AVM2 inspection tools additionally require a **Java 17+ JDK** and are
+verified against FFDec **26.4.0** JARs only.
 
 This fork is **not on PyPI** — install from git:
 
@@ -203,7 +245,7 @@ CLI arguments take precedence over environment variables.
 git clone https://github.com/an4strawhat/ffdecmcp-ext.git
 cd ffdecmcp-ext
 pip install -e ".[dev]"
-python -m pytest tests/          # 25 tests
+python -m pytest tests/          # 43 tests; set FFDEC_TEST_JAR to include Java bridge tests
 ```
 
 Verification against real SWFs (two full suites plus negative cases) was
