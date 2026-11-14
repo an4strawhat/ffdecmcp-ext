@@ -30,7 +30,7 @@ files, no SWF modification:
 
 | Tool | Description |
 |---|---|
-| `list_avm2_classes` | Class identities, superclasses, interfaces, instance/static initializer IDs |
+| `list_avm2_classes` | Class identities, superclasses, interfaces, initializer IDs, and instance/static trait tables |
 | `inspect_avm2_method` | Method signature, direct/enclosing owners, exception table, decoded instructions |
 | `find_avm2_property_accesses` | Property reads/writes (`get/setproperty`, `get/setsuper`, `initproperty`, `get/setslot`, `get/setglobalslot`) with containing methods, lexical contexts and bytecode offsets |
 
@@ -44,11 +44,52 @@ returned `sha256` as `expected_sha256`, keeping other parameters unchanged.
 Pagination is rejected if the file changes. Errors return structured
 `success:false` results without disconnecting.
 
-**Explicit uncertainties (never guessed):** `receiver_type` is always `null`
-(containing class ≠ receiver type); runtime-computed property names and
-unresolved slot IDs are reported as such; `enclosing_contexts` follow
-`newfunction` lexical chains and are not proof of unique ownership or runtime
-execution; container validation is not full ABC verification.
+#### Slot and trait resolution
+
+- Class rows contain `instance_traits` and `static_traits`. Each trait reports
+  its qualified name, kind, and `declared_slot_id`. A positive ID is explicit,
+  zero requests automatic assignment, and `null` means the trait has no slot
+  ID field.
+- `find_avm2_property_accesses` resolves supported `setslot` writes before
+  applying the exact simple-name filter. Results retain the raw slot ID,
+  qualified trait name, ABC index, method ID, bytecode offset, and owner context.
+  `slot_resolution` identifies an `activation_trait`, `catch_scope`,
+  `instance_trait`, or `static_trait`. Class matches include the receiver's
+  qualified class in `receiver_type`. The enclosing class describes the write
+  location, while the receiver identifies the object being written to.
+- Receiver layouts must agree at control-flow joins. Exception edges preserve
+  register layouts only where incoming paths agree. A detached empty-range
+  handler can yield a named catch write with `reachability: "unreachable"`.
+  An absent reachability field leaves runtime execution unspecified.
+- Use an empty property-name filter to include unresolved writes. Runtime names,
+  inherited or automatically assigned class layouts, and unsupported receiver
+  traces can remain unresolved. Slot-name inference currently applies to
+  `setslot` in the property search. Lexical contexts follow `newfunction`
+  chains and may list multiple owners. Container validation covers the SWF
+  envelope and tag boundaries.
+
+The MCP stdio checks verify complete pagination, named slot resolution,
+and the sole unreachable catch write against locally supplied expectations.
+They verify that the input hashes stay stable and that the server creates no
+export files in its working directory.
+
+Keep the fixture manifest outside the checkout. Provide a JSON array containing
+one object per SWF. Each object has a `path` (absolute or relative to the
+manifest), a `sha256`, and a `counts` object mapping each expected slot
+resolution kind to its count. Include a `catch` object on exactly one fixture.
+It supplies the expected `abc_index`, `method_id`, `offset`, `slot_id`,
+and `property_name`, an `owner_contains` array of owner name fragments, an
+`ordinary_site` pair of method ID and offset for a catch without a reachability
+marker, and an `exception_range` triple of start, end, and handler target.
+
+PowerShell commands from the project checkout
+
+```powershell
+$env:FFDEC_TEST_JAR = 'C:\path\to\ffdec.jar'
+$env:FFDEC_TEST_ASSET_MANIFEST = 'C:\local-fixtures\inspection.json'
+$env:FFDEC_TEST_MCP_STDIO = '1'
+python -m pytest tests
+```
 
 ### Instance metadata (AMF)
 

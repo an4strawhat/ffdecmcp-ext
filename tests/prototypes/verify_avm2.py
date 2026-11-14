@@ -25,7 +25,8 @@ def u30(value):
     return bytes(result)
 
 
-def fixture(value=7, dynamic=False, nested=False, reindexed=False, method_code=None):
+def fixture(value=7, dynamic=False, nested=False, reindexed=False, method_code=None,
+            activation=False, class_slots=False):
     """Minimal ABC with a known class, initializer, and property-write method."""
     strings = ["", "Probe", "Object", "value", "writeValue"]
     abc = struct.pack("<HH", 16, 46)
@@ -40,11 +41,17 @@ def fixture(value=7, dynamic=False, nested=False, reindexed=False, method_code=N
     if dynamic:
         abc += b"\x11"  # RTQNameL: namespace and name on stack
     count = 5 if nested else 4
-    abc += u30(count) + b"\x00\x00\x00\x00" * count  # method_info
+    abc += u30(count)
+    for i in range(count):
+        abc += bytes([0, 0, 0, 2 if activation and i == 2 else 0])  # method_info
     abc += b"\x00"  # metadata
-    abc += b"\x01\x01\x02\x01\x00\x00\x01"  # class, name, super, flags, interfaces, iinit, traits
+    abc += b"\x01\x01\x02\x01\x00\x00"  # class, name, super, flags, interfaces, iinit
+    abc += u30(2 if class_slots else 1)
     abc += bytes([3 if reindexed else 4]) + b"\x01\x00\x02"  # writeValue -> method 2
-    abc += b"\x01\x00"  # class_info cinit=1, no traits
+    if class_slots:
+        abc += b"\x03\x00\x01\x00\x00"  # instance value, slot 1
+    abc += b"\x01"  # class_info cinit=1
+    abc += b"\x01\x04\x00\x01\x00\x00" if class_slots else b"\x00"  # static writeValue, slot 1
     abc += b"\x01\x03\x01\x01\x04\x01\x00"  # script init=3 + class trait
     codes = [b"\xd0\x30\xd0\x49\x00\x47", b"\x47",
              b"\xd0\x24" + bytes([value]) + b"\x61\x03\x47", b"\x47"]
@@ -57,9 +64,14 @@ def fixture(value=7, dynamic=False, nested=False, reindexed=False, method_code=N
         codes[2] = b"\x40\x04\x29\x47"  # newfunction method4, pop, returnvoid
     if method_code is not None:
         codes[2] = method_code
+    if class_slots:
+        codes[1] = b"\xd0\x24\x07\x6d\x01\x47"
     abc += u30(count)
     for i, code in enumerate(codes):
-        abc += u30(i) + b"\x04\x01\x00\x01" + u30(len(code)) + code + b"\x00\x00"
+        has_activation = activation and i == 2
+        abc += u30(i) + bytes([4, 1, 0, 2 if has_activation else 1])
+        abc += u30(len(code)) + code + b"\x00"  # no exception handlers
+        abc += b"\x01\x03\x00\x01\x00\x00" if has_activation else b"\x00"
     payload = struct.pack("<I", 0) + b"\x00" + abc
     tag = struct.pack("<HI", (82 << 6) | 63, len(payload)) + payload
     body = b"\x08\x00\x00\x18\x01\x00"  # RECT, 24 fps, 1 frame
@@ -75,7 +87,7 @@ def digest(path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ffdec-jar", required=True, type=Path)
-    parser.add_argument("--assets", required=True, type=Path)
+    parser.add_argument("--assets", required=True, nargs="+", type=Path)
     args = parser.parse_args()
     work = Path(tempfile.mkdtemp(prefix="avm2-verification-", dir=os.environ.get("TEMP")))
     classes = work / "bridge"
@@ -139,12 +151,7 @@ def main():
            and r["opcode"] == "setproperty"] == writes)
 
     asset_summary = []
-    candidates = ["academy.swf", "network_library.swf", "code_library.swf"]
-    for filename in candidates:
-        path = next(args.assets.rglob(filename), None)
-        if path is None:
-            check("representative asset available: " + filename, False)
-            continue
+    for path in args.assets:
         rs = inspect(path)
         ins = [r for r in rs if r["type"] == "instruction"]
         ws = [r for r in ins if r["opcode"] in ("setproperty", "initproperty", "setsuper")]

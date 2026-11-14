@@ -6,6 +6,7 @@ import java.io.*;
 import java.util.*;
 import com.jpexs.decompiler.flash.SWF;
 import com.jpexs.decompiler.flash.abc.ABC;
+import com.jpexs.decompiler.flash.abc.AVM2LocalData;
 import com.jpexs.decompiler.flash.abc.types.*;
 import com.jpexs.decompiler.flash.abc.types.traits.*;
 import com.jpexs.decompiler.flash.abc.avm2.instructions.*;
@@ -25,6 +26,17 @@ public class InspectionBridge {
     }
     static String name(ABC a, int index) {
         return index == 0 ? "*" : a.constants.getMultiname(index).toString(a.constants,Collections.emptyList());
+    }
+    static String traitDetails(ABC abc, Traits traits) {
+        StringJoiner result = new StringJoiner(",", "[", "]");
+        for (Trait trait : traits.traits) {
+            String slot = trait instanceof TraitWithSlot withSlot
+                ? Integer.toString(withSlot.getSlotIndex()) : "null";
+            result.add("{\"name\":" + q(name(abc, trait.name_index))
+                + ",\"kind\":" + q(trait.getKindToStr())
+                + ",\"declared_slot_id\":" + slot + "}");
+        }
+        return result.toString();
     }
     static void own(Map<Integer,Set<String>> map, int id, String label) {
         map.computeIfAbsent(id,k->new TreeSet<>()).add(label);
@@ -93,6 +105,257 @@ public class InspectionBridge {
     static final Set<String> WRITES=Set.of("setproperty","initproperty","setsuper","setslot","setglobalslot");
     static final Set<String> READS=Set.of("getproperty","getsuper","getslot","getglobalslot");
     static final Set<String> MULTINAMES=Set.of("setproperty","initproperty","setsuper","getproperty","getsuper");
+    static final Set<String> VALUE_PUSHES = Set.of(
+        "pushnull", "pushundefined", "pushtrue", "pushfalse", "pushbyte",
+        "pushshort", "pushint", "pushuint", "pushdouble", "pushstring", "pushnan");
+    static final Set<String> VALUE_COERCIONS =
+        Set.of("coerce", "coerce_a", "coerce_s", "convert_i", "convert_u", "convert_b");
+
+    record SlotLayout(String resolution, String className, Map<Integer, Integer> slots) {}
+    record ResolvedSlot(SlotLayout layout, int nameIndex, boolean unreachable) {}
+
+    static SlotLayout slotLayout(String resolution, String className, Traits traits) {
+        Map<Integer, Integer> slots = new HashMap<>();
+        for (Trait trait : traits.traits) {
+            if (!(trait instanceof TraitWithSlot slot)) continue;
+            int id = slot.getSlotIndex();
+            // An implicit or duplicate ID needs effective layout validation.
+            if (id <= 0 || slots.putIfAbsent(id, trait.name_index) != null) return null;
+        }
+        return slots.isEmpty() ? null : new SlotLayout(resolution, className, slots);
+    }
+
+    static void addClassReceiver(Map<Integer, SlotLayout> receivers, Set<Integer> registered,
+                                 int method, SlotLayout layout) {
+        if (!registered.add(method)) receivers.remove(method);
+        else if (layout != null) receivers.put(method, layout);
+    }
+
+    static Map<Integer, SlotLayout> classReceivers(ABC abc) {
+        Map<Integer, SlotLayout> receivers = new HashMap<>();
+        Set<Integer> registered = new HashSet<>();
+        for (int i = 0; i < abc.class_info.size(); i++) {
+            InstanceInfo instance = abc.instance_info.get(i);
+            ClassInfo statics = abc.class_info.get(i);
+            String owner = name(abc, instance.name_index);
+            SlotLayout instanceLayout = slotLayout("instance_trait", owner, instance.instance_traits);
+            SlotLayout staticLayout = slotLayout("static_trait", owner, statics.static_traits);
+            addClassReceiver(receivers, registered, instance.iinit_index, instanceLayout);
+            addClassReceiver(receivers, registered, statics.cinit_index, staticLayout);
+            for (Trait trait : instance.instance_traits.traits)
+                if (trait instanceof TraitMethodGetterSetter method)
+                    addClassReceiver(receivers, registered, method.method_info, instanceLayout);
+            for (Trait trait : statics.static_traits.traits)
+                if (trait instanceof TraitMethodGetterSetter method)
+                    addClassReceiver(receivers, registered, method.method_info, staticLayout);
+        }
+        for (ScriptInfo script : abc.script_info) {
+            receivers.remove(script.init_index);
+            for (Trait trait : script.traits.traits)
+                if (trait instanceof TraitMethodGetterSetter method) receivers.remove(method.method_info);
+        }
+        Set<String> independentReceivers = Set.of("newfunction", "callstatic");
+        for (MethodBody body : abc.bodies)
+            for (AVM2Instruction ins : body.getCode().code)
+                if (independentReceivers.contains(ins.definition.instructionName))
+                    receivers.remove(ins.operands[0]);
+        return receivers;
+    }
+
+    static int localIndex(AVM2Instruction ins, String op, String prefix) {
+        if (op.equals(prefix)) return ins.operands[0];
+        if (op.length() == prefix.length() + 1 && op.startsWith(prefix)) {
+            int index = op.charAt(prefix.length()) - '0';
+            if (index >= 0 && index <= 3) return index;
+        }
+        return -1;
+    }
+
+    // A null layout represents an unknown value. A null frame represents an
+    // incoming path whose stack or scope shape could not be established.
+    record Frame(Map<Integer, SlotLayout> locals, List<SlotLayout> stack, List<SlotLayout> scopes) {
+        Frame copy() {
+            return new Frame(new HashMap<>(locals), new ArrayList<>(stack), new ArrayList<>(scopes));
+        }
+
+        Frame merge(Frame other) {
+            if (other == null || stack.size() != other.stack.size()
+                    || scopes.size() != other.scopes.size()) return null;
+            Frame merged = copy();
+            merged.locals.entrySet().removeIf(e -> !Objects.equals(e.getValue(), other.locals.get(e.getKey())));
+            for (int i = 0; i < stack.size(); i++)
+                if (!Objects.equals(stack.get(i), other.stack.get(i))) merged.stack.set(i, null);
+            for (int i = 0; i < scopes.size(); i++)
+                if (!Objects.equals(scopes.get(i), other.scopes.get(i))) merged.scopes.set(i, null);
+            return merged;
+        }
+    }
+
+    static void enqueue(int index, Frame frame, Map<Integer, Frame> states, ArrayDeque<Integer> work) {
+        boolean seen = states.containsKey(index);
+        Frame previous = states.get(index);
+        Frame merged = !seen ? frame : previous == null ? null : previous.merge(frame);
+        if (!seen || !Objects.equals(previous, merged)) {
+            states.put(index, merged);
+            work.add(index);
+        }
+    }
+
+    static final Set<String> STACK_ONLY = Set.of(
+        "getslot", "newarray", "newobject", "constructsuper", "constructprop", "construct",
+        "call", "callproperty", "callpropvoid", "callproplex", "callsuper", "callsupervoid",
+        "getproperty", "setproperty", "initproperty", "findpropstrict", "findproperty", "getlex",
+        "add", "add_i", "subtract", "subtract_i", "multiply", "multiply_i", "divide",
+        "increment", "increment_i", "decrement", "decrement_i", "not", "equals", "strictequals",
+        "lshift", "greaterequals", "greaterthan", "lessthan", "lessequals", "negate",
+        "astypelate", "istypelate", "convert_d", "getglobalscope", "getdescendants",
+        "bitor", "bitxor", "bitand", "rshift", "urshift", "checkfilter",
+        "modulo", "nextname", "nextvalue", "hasnext2",
+        "debug", "debugline", "debugfile", "label", "nop");
+
+    static Frame transfer(AVM2Instruction ins, Frame frame, SlotLayout activation,
+                          List<SlotLayout> catches, AVM2LocalData data) {
+        Frame next = frame.copy();
+        List<SlotLayout> stack = next.stack, scopes = next.scopes;
+        String op = ins.definition.instructionName;
+        int depth = stack.size();
+        int load = localIndex(ins, op, "getlocal"), store = localIndex(ins, op, "setlocal");
+        if (load >= 0) {
+            stack.add(next.locals.get(load));
+        } else if (op.equals("newcatch") && ins.operands[0] < catches.size()) {
+            stack.add(catches.get(ins.operands[0]));
+        } else if (op.equals("newactivation") || op.equals("newfunction") || VALUE_PUSHES.contains(op)) {
+            stack.add(op.equals("newactivation") ? activation : null);
+        } else if (op.equals("dup") && depth >= 1) {
+            stack.add(stack.get(depth - 1));
+        } else if (op.equals("swap") && depth >= 2) {
+            Collections.swap(stack, depth - 1, depth - 2);
+        } else if ((op.equals("pushscope") || op.equals("pushwith")) && depth >= 1) {
+            scopes.add(stack.remove(depth - 1));
+        } else if (op.equals("popscope") && !scopes.isEmpty()) {
+            scopes.remove(scopes.size() - 1);
+        } else if (op.equals("getscopeobject") && ins.operands[0] < scopes.size()) {
+            stack.add(scopes.get(ins.operands[0]));
+        } else if (store >= 0 && depth >= 1) {
+            SlotLayout value = stack.remove(depth - 1);
+            if (value == null) next.locals.remove(store);
+            else next.locals.put(store, value);
+        } else if (op.equals("kill") || op.startsWith("inclocal") || op.startsWith("declocal")) {
+            next.locals.remove(ins.operands[0]);
+        } else if (op.equals("pop") && depth >= 1) {
+            stack.remove(depth - 1);
+        } else if (VALUE_COERCIONS.contains(op) && depth >= 1) {
+            stack.set(depth - 1, null);
+        } else if (op.equals("setslot") && depth >= 2) {
+            stack.subList(depth - 2, depth).clear();
+        } else if (op.equals("jump") || ins.isBranch() || STACK_ONLY.contains(op)) {
+            if (op.equals("hasnext2")) {
+                // Enumeration updates both the object and index registers.
+                next.locals.remove(ins.operands[0]);
+                next.locals.remove(ins.operands[1]);
+            }
+            int pop = ins.getStackPopCount(data), push = ins.getStackPushCount(data);
+            if (pop < 0 || pop > depth || push < 0 || depth - pop + push > data.methodBody.max_stack)
+                return null;
+            stack.subList(depth - pop, depth).clear();
+            for (int i = 0; i < push; i++) stack.add(null);
+        } else {
+            return null;
+        }
+        if (stack.size() > data.methodBody.max_stack || scopes.size() > data.methodBody.max_scope_depth)
+            return null;
+        return next;
+    }
+
+    static Map<Long, ResolvedSlot> slotWrites(ABC abc, MethodBody body, SlotLayout classReceiver) {
+        SlotLayout activation = slotLayout("activation_trait", null, body.traits);
+        if (activation == null && classReceiver == null && body.exceptions.length == 0) return Map.of();
+        List<AVM2Instruction> code = body.getCode().code;
+        if (code.stream().noneMatch(ins -> ins.definition.instructionName.equals("setslot"))) return Map.of();
+
+        Map<Long, Integer> positions = new HashMap<>();
+        for (int i = 0; i < code.size(); i++) positions.put(code.get(i).getAddress(), i);
+        Map<Integer, Frame> states = new HashMap<>();
+        ArrayDeque<Integer> work = new ArrayDeque<>();
+        Frame entry = new Frame(new HashMap<>(), new ArrayList<>(), new ArrayList<>());
+        if (classReceiver != null) entry.locals.put(0, classReceiver);
+        enqueue(0, entry, states, work);
+        List<SlotLayout> catches = new ArrayList<>();
+        for (ABCException handler : body.exceptions) {
+            catches.add(handler.name_index == 0 ? null
+                : new SlotLayout("catch_scope", null, Map.of(1, handler.name_index)));
+        }
+        AVM2LocalData data = new AVM2LocalData();
+        data.abc = abc;
+        data.methodBody = body;
+        data.code = body.getCode();
+        if (!traceSlots(code, positions, states, work, activation, catches, data)) return Map.of();
+
+        Map<Long, ResolvedSlot> resolved = new HashMap<>();
+        collectSlots(code, states, Collections.emptySet(), false, resolved);
+
+        // Analyze empty-range handlers in isolation. Their synthetic entry
+        // frames must never influence the method-entry analysis.
+        Map<Integer, Frame> detached = new HashMap<>();
+        for (ABCException handler : body.exceptions) {
+            Integer target = positions.get((long) handler.target);
+            if (handler.start == handler.end && target != null && !states.containsKey(target)) {
+                Frame caught = new Frame(new HashMap<>(), new ArrayList<>(), new ArrayList<>());
+                caught.stack.add(null);
+                enqueue(target, caught, detached, work);
+            }
+        }
+        if (traceSlots(code, positions, detached, work, null, catches, data))
+            collectSlots(code, detached, states.keySet(), true, resolved);
+        return resolved;
+    }
+
+    static boolean traceSlots(List<AVM2Instruction> code, Map<Long, Integer> positions,
+                              Map<Integer, Frame> states, ArrayDeque<Integer> work,
+                              SlotLayout activation, List<SlotLayout> catches, AVM2LocalData data) {
+        long steps = 0, stepLimit = Math.min(100_000L, 32L * code.size());
+        while (!work.isEmpty()) {
+            if (++steps > stepLimit) return false;
+            int i = work.remove();
+            AVM2Instruction ins = code.get(i);
+            String op = ins.definition.instructionName;
+            Frame state = states.get(i);
+            for (ABCException handler : data.methodBody.exceptions) {
+                if (ins.getAddress() < handler.start || ins.getAddress() >= handler.end) continue;
+                Integer target = positions.get((long) handler.target);
+                if (target == null) continue;
+                Frame caught = new Frame(state == null ? new HashMap<>() : new HashMap<>(state.locals),
+                    new ArrayList<>(), new ArrayList<>());
+                caught.stack.add(null);
+                enqueue(target, caught, states, work);
+            }
+            if (ins.isExit() || op.equals("throw")) continue;
+            Frame next = state == null ? null : transfer(ins, state, activation, catches, data);
+            for (long target : ins.getOffsets()) {
+                Integer index = positions.get(target);
+                if (index != null) enqueue(index, next, states, work);
+            }
+            if (i + 1 < code.size() && !op.equals("jump") && !op.equals("lookupswitch"))
+                enqueue(i + 1, next, states, work);
+        }
+        return true;
+    }
+
+    static void collectSlots(List<AVM2Instruction> code, Map<Integer, Frame> states,
+                             Set<Integer> reachable, boolean unreachable, Map<Long, ResolvedSlot> resolved) {
+        for (var entryState : states.entrySet()) {
+            if (reachable.contains(entryState.getKey())) continue;
+            AVM2Instruction ins = code.get(entryState.getKey());
+            Frame state = entryState.getValue();
+            if (state == null || !ins.definition.instructionName.equals("setslot") || state.stack.size() < 2)
+                continue;
+            SlotLayout receiver = state.stack.get(state.stack.size() - 2);
+            if (receiver == null || unreachable && !receiver.resolution().equals("catch_scope")) continue;
+            Integer nameIndex = receiver.slots().get(ins.operands[0]);
+            if (nameIndex != null)
+                resolved.put(ins.getAddress(), new ResolvedSlot(receiver, nameIndex, unreachable));
+        }
+    }
     static void run(String[] args) throws Exception {
         String op=args[0], property=args[4], access=args[5];
         int selectedAbc=Integer.parseInt(args[2]), selectedMethod=Integer.parseInt(args[3]);
@@ -115,13 +378,19 @@ public class InspectionBridge {
                         +",\"superclass\":"+q(name(a,ii.super_index))+",\"interfaces\":"+array(interfaces)
                         +",\"instance_initializer\":"+ii.iinit_index+",\"static_initializer\":"+ci.cinit_index
                         +",\"instance_trait_count\":"+ii.instance_traits.traits.size()
-                        +",\"static_trait_count\":"+ci.static_traits.traits.size()+"}");
+                        +",\"static_trait_count\":"+ci.static_traits.traits.size()
+                        +",\"instance_traits\":"+traitDetails(a,ii.instance_traits)
+                        +",\"static_traits\":"+traitDetails(a,ci.static_traits)+"}");
                 }
                 continue;
             }
             Map<Integer,Set<String>> direct=owners(a), all=enclosing(a,direct);
+            boolean resolveWrites = op.equals("accesses") && !access.equals("read");
+            Map<Integer, SlotLayout> receivers = resolveWrites ? classReceivers(a) : Map.of();
             for(MethodBody b:a.bodies) {
                 if(op.equals("method") && b.method_info!=selectedMethod) continue;
+                Map<Long, ResolvedSlot> resolvedSlots =
+                    resolveWrites ? slotWrites(a,b,receivers.get(b.method_info)) : Map.of();
                 if(op.equals("method")) {
                     foundMethod=true;
                     MethodInfo mi=a.method_info.get(b.method_info);
@@ -142,8 +411,12 @@ public class InspectionBridge {
                     String opcode=ins.definition.instructionName;
                     boolean read=READS.contains(opcode), write=WRITES.contains(opcode);
                     int mnIndex=0; Multiname mn=null; String simple="";
+                    ResolvedSlot resolvedSlot = resolvedSlots.get(ins.getAddress());
                     if(MULTINAMES.contains(opcode)) {
                         mnIndex=ins.operands[0]; mn=a.constants.getMultiname(mnIndex);
+                        if(mn.name_index!=0) simple=a.constants.getString(mn.name_index);
+                    } else if (resolvedSlot != null) {
+                        mnIndex=resolvedSlot.nameIndex(); mn=a.constants.getMultiname(mnIndex);
                         if(mn.name_index!=0) simple=a.constants.getString(mn.name_index);
                     }
                     if(op.equals("accesses")) {
@@ -159,7 +432,11 @@ public class InspectionBridge {
                         +",\"multiname\":"+q(mn==null?"":name(a,mnIndex))
                         +",\"runtime_name\":"+(mn!=null&&mn.needsName())
                         +",\"runtime_namespace\":"+(mn!=null&&mn.needsNs())
-                        +",\"slot_id\":"+slot+",\"receiver_type\":null}");
+                        +",\"slot_id\":"+slot+",\"receiver_type\":"
+                        +(resolvedSlot == null || resolvedSlot.layout().className() == null
+                            ? "null" : q(resolvedSlot.layout().className()))
+                        +(resolvedSlot == null ? "" : ",\"slot_resolution\":"+q(resolvedSlot.layout().resolution()))
+                        +(resolvedSlot != null && resolvedSlot.unreachable() ? ",\"reachability\":\"unreachable\"" : "")+"}");
                 }
             }
         }

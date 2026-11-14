@@ -30,6 +30,8 @@ def register_inspection_tools(mcp):
     ) -> dict:
         """Read AVM2 class identities, superclasses, interfaces and initializer IDs without export.
 
+        Instance and static traits include qualified names, kinds and declared_slot_id.
+        A zero slot ID requests automatic assignment. Null indicates no slot ID field.
         Requires Java 17+ JDK, FFDec 26.4.0 JAR, FWS/CWS input <=64 MiB.
         For pagination pass next_offset as offset and sha256 as expected_sha256;
         keep every other query parameter unchanged. max_bytes bounds JSON results.
@@ -69,7 +71,12 @@ def register_inspection_tools(mcp):
         empty includes runtime-computed names and unresolved slot accesses.
         access: read, write or all. Includes get/setproperty, get/setsuper,
         initproperty, get/setslot and get/setglobalslot, not calls or deletes.
-        Namespaces are preserved as multinames. Receiver types stay unknown.
+        Writes to proven activation, catch or class receivers match by name.
+        slot_resolution identifies activation_trait, catch_scope, instance_trait
+        or static_trait. Class matches include the receiver class name.
+        Named catch writes in detached empty-range handlers can report
+        reachability="unreachable" when no method-entry path reaches the write.
+        Namespaces are preserved as multinames.
         Continue using next_offset and expected_sha256 with unchanged filters.
         Requires Java 17+ JDK, FFDec 26.4.0 JAR, FWS/CWS <=64 MiB.
         """

@@ -200,12 +200,12 @@ def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
     result = json.loads(payload)
     result.update(success=True, sha256=fingerprint, ffdec_version=SUPPORTED_FFDEC,
         validation=validation, limitations=[
-            "Receiver types and slot names are not inferred.",
+            "Property access search resolves named catch slots, explicit activation slots and directly declared class slots when supported control flow establishes the receiver. Inherited and automatic slot layouts are not inferred.",
             "Enclosing contexts are not proof of unique ownership or runtime execution.",
             "Container validation is not full ABC verification.",
-            "Exact property-name filters omit unresolved runtime names; use an empty filter to include them.",
+            "Exact property-name filters omit unresolved runtime names and slots; use an empty filter to include them.",
         ])
     # A conservative result cap also bounds duplicated MCP text/structured data.
-    if len(json.dumps(result, ensure_ascii=True).encode()) > max_bytes:
+    if len(json.dumps(result, ensure_ascii=True, separators=(",", ":")).encode()) > max_bytes:
         raise InspectionError("Response envelope exceeds max_bytes; narrow the query")
     return result

@@ -8,12 +8,11 @@ installed server, its catalog, or the public API.
 Requires a Java 17+ JDK (`java` and `javac`) and FFDec 26.4.0:
 
 ```text
-python tests/prototypes/verify_avm2.py --ffdec-jar "<FFDec installation>/ffdec.jar" --assets "<local SWF asset directory>"
+python tests/prototypes/verify_avm2.py --ffdec-jar "<FFDec installation>/ffdec.jar" --assets "<local fixture A.swf>" "<local fixture B.swf>" "<local fixture C.swf>"
 ```
 
 The harness compiles the small bridge into temporary storage and constructs
-synthetic SWFs. Representative assets are located by filename in the supplied
-directory. No game files are bundled. Results and intermediate fixtures stay in
+synthetic SWFs. Pass representative assets as explicit local file paths. No game files are bundled. Results and intermediate fixtures stay in
 temporary storage; the script prints the report location.
 
 The bridge reads SWFs using FFDec's library API, walks ABC objects, and prints
@@ -140,7 +139,7 @@ proposed engineering tasks, not implemented features.
 ## Strict validation and additional verification
 
 ```text
-python tests/prototypes/verify_hardening.py --ffdec-jar "<FFDec installation>/ffdec.jar" --assets "<local SWF asset directory>"
+python tests/prototypes/verify_hardening.py --ffdec-jar "<FFDec installation>/ffdec.jar" --assets "<local fixture A.swf>" "<local fixture B.swf>" "<local fixture C.swf>"
 ```
 
 Observed **23/23 additional checks passed**:

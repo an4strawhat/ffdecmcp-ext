@@ -17,7 +17,7 @@ from verify_limitations import enclosing_contexts
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ffdec-jar", required=True, type=Path)
-    p.add_argument("--assets", required=True, type=Path)
+    p.add_argument("--assets", required=True, nargs="+", type=Path)
     args = p.parse_args()
     work = Path(tempfile.mkdtemp(prefix="avm2-hardening-", dir=os.environ.get("TEMP")))
     checks, samples = [], []
@@ -73,8 +73,7 @@ def main():
     subprocess.run(["javac", "-cp", str(args.ffdec_jar), "-d", str(classes),
                     str(Path(__file__).with_name("Avm2Probe.java"))], check=True)
     cp = os.pathsep.join([str(classes), str(args.ffdec_jar)])
-    for filename in ["academy.swf", "network_library.swf", "code_library.swf"]:
-        path = next(args.assets.rglob(filename))
+    for path in args.assets:
         before = digest(path)
         preflight = validate_swf(path.read_bytes())
         check("strict validation accepts representative real asset", preflight["tags"] > 0)
