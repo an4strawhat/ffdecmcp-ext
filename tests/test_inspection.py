@@ -80,16 +80,51 @@ def test_supervisor_output_bound():
         inspection._run([sys.executable, "-c", "print('x'*100000)"], 5, 4096)
 
 
-def test_stale_cursor_rejected_before_java(tmp_path):
+@pytest.mark.parametrize("offset", [0, 1])
+@pytest.mark.parametrize("expected", ["", " " * 64, "a" * 63, "a" * 65, "g" * 64, "a" * 64 + "\n"])
+def test_malformed_digest_rejected_before_java(tmp_path, offset, expected):
+    path = tmp_path / "sample.swf"
+    path.write_bytes(fixture())
+    with pytest.raises(inspection.InspectionError, match="expected_sha256 must be exactly 64 hexadecimal characters"):
+        inspection.inspect_avm2("classes", path, offset=offset, expected_sha256=expected)
+
+
+@pytest.mark.parametrize("offset", [0, 1])
+def test_stale_cursor_rejected_before_java(tmp_path, offset):
     path = tmp_path / "sample.swf"
     path.write_bytes(fixture())
     with pytest.raises(inspection.InspectionError, match="Artifact changed"):
-        inspection.inspect_avm2("classes", str(path), expected_sha256="wrong")
+        inspection.inspect_avm2("classes", path, offset=offset, expected_sha256="0" * 64)
 
 
 def test_pagination_requires_digest():
     with pytest.raises(inspection.InspectionError, match="Pagination requires"):
         inspection.inspect_avm2("classes", "unused.swf", offset=1)
+
+
+def test_inspection_accepts_digest_casing_on_each_page(tmp_path, monkeypatch):
+    path = tmp_path / "sample.swf"
+    data = fixture()
+    path.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    mixed = digest[:32].upper() + digest[32:]
+    monkeypatch.setattr(inspection, "_bridge_command", lambda timeout: (["bridge"], "26.5.0"))
+
+    def run_page(command, timeout, output_limit):
+        offset = int(command[7])
+        return json.dumps({"results": [{"kind": "instruction", "offset": offset}],
+                           "next_offset": 1 if offset == 0 else None})
+
+    monkeypatch.setattr(inspection, "_run", run_page)
+    first = inspection.inspect_avm2("accesses", path, limit=1)
+    second = inspection.inspect_avm2("accesses", path, limit=1,
+        offset=first["next_offset"], expected_sha256=digest)
+    assert first["sha256"] == second["sha256"] == digest
+    assert second["results"] != first["results"]
+    for expected in (digest, digest.upper(), mixed):
+        assert inspection.inspect_avm2("accesses", path, limit=1, expected_sha256=expected) == first
+        assert inspection.inspect_avm2("accesses", path, limit=1,
+            offset=first["next_offset"], expected_sha256=expected) == second
 
 
 def test_mcp_catalog_has_readonly_tools():
@@ -178,7 +213,7 @@ def test_java_compare_reordered_abc_and_methods(java_config, tmp_path):
         inspection.compare_avm2(original, patched, offset=7)
     last = inspection.compare_avm2(
         original, patched, include_unchanged=True, offset=7, limit=7,
-        expected_original_sha256=all_rows["original_sha256"],
+        expected_original_sha256=all_rows["original_sha256"].upper(),
         expected_patched_sha256=all_rows["patched_sha256"],
     )
     assert len(last["results"]) == 1 and last["next_offset"] is None

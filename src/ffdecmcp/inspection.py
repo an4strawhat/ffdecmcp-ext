@@ -189,8 +189,11 @@ def _validated_input(swf_path, expected_sha256):
     if len(data) > MAX_INPUT:
         raise InspectionError("Input file exceeds 64 MiB")
     fingerprint = hashlib.sha256(data).hexdigest()
-    if expected_sha256 and expected_sha256 != fingerprint:
-        raise InspectionError("Artifact changed; restart inspection with offset=0")
+    if expected_sha256 is not None:
+        if re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256) is None:
+            raise InspectionError("expected_sha256 must be exactly 64 hexadecimal characters")
+        if expected_sha256.lower() != fingerprint:
+            raise InspectionError("Artifact changed; restart inspection with offset=0")
     return path, fingerprint, validate_container(data)
 
 
@@ -246,7 +249,7 @@ def compare_avm2(original_swf_path, patched_swf_path, *, include_unchanged=False
     _check_page(offset, limit, max_bytes, timeout)
     if not 0 <= instruction_offset <= MAX_INPUT:
         raise InspectionError("instruction_offset is outside the supported range")
-    if (offset or instruction_offset) and not (expected_original_sha256 and expected_patched_sha256):
+    if (offset or instruction_offset) and (expected_original_sha256 is None or expected_patched_sha256 is None):
         raise InspectionError("Pagination requires both expected SHA-256 values")
     original, original_sha, original_validation = _validated_input(original_swf_path, expected_original_sha256)
     patched, patched_sha, patched_validation = _validated_input(patched_swf_path, expected_patched_sha256)
@@ -286,7 +289,7 @@ def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
             raise InspectionError("character_id must be 0..65535")
         if timeline not in {"all", "root", "nested"}:
             raise InspectionError("Invalid timeline filter")
-    if offset and not expected_sha256:
+    if offset and expected_sha256 is None:
         raise InspectionError("Pagination requires expected_sha256 from the first response")
     path, fingerprint, validation = _validated_input(swf_path, expected_sha256)
     bridge, version = _bridge_command(timeout)
