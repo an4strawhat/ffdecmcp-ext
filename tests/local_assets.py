@@ -1,9 +1,22 @@
 """Load real-asset fixtures and expected results from a local manifest."""
 import json
+import lzma
 import os
 from pathlib import Path
+import struct
 
 import pytest
+
+
+def compress_zws(raw):
+    """Build a ZWS fixture from an uncompressed SWF and check the encoded body."""
+    assert raw[:3] == b"FWS"
+    dictionary = 1 << 20
+    filters = [{"id": lzma.FILTER_LZMA1, "dict_size": dictionary, "lc": 3, "lp": 0, "pb": 2}]
+    compressed = lzma.compress(raw[8:], format=lzma.FORMAT_RAW, filters=filters)
+    assert lzma.decompress(compressed, format=lzma.FORMAT_RAW, filters=filters) == raw[8:]
+    return (b"ZWS" + bytes([max(raw[3], 13)]) + raw[4:8]
+            + struct.pack("<IBI", len(compressed), 0x5D, dictionary) + compressed)
 
 
 def local_assets():

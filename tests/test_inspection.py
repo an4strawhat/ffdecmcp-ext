@@ -11,8 +11,21 @@ import pytest
 
 from ffdecmcp import inspection
 from ffdecmcp.config import FFDecConfig, FFDecMode
-from tests.local_assets import assert_catch, catch_asset, site
+from tests.local_assets import assert_catch, catch_asset, compress_zws, site
 from tests.prototypes.verify_avm2 import fixture
+
+
+@pytest.mark.parametrize("version", ["26.4.0", "26.5.0"])
+def test_inspection_recognizes_release_banner(version):
+    assert inspection._inspection_version(
+        f"Log warning\r\nJPEXS Free Flash Decompiler v.{version}\r\nUsage"
+    ) == version
+
+
+@pytest.mark.parametrize("version", ["26.4.01", "26.5.0-beta", "26.6.0"])
+def test_inspection_rejects_unapproved_release_banner(version):
+    with pytest.raises(inspection.InspectionError, match="detected " + version):
+        inspection._inspection_version(f"JPEXS Free Flash Decompiler v.{version}\n")
 
 
 @pytest.mark.parametrize("data", [b"FWS", fixture()[:-3],
@@ -34,6 +47,27 @@ def test_preflight_accepts_fws_and_cws():
     raw = fixture()
     compressed = b"CWS" + raw[3:8] + zlib.compress(raw[8:])
     assert inspection.validate_container(raw) == inspection.validate_container(compressed)
+
+
+def test_preflight_accepts_zws():
+    raw = fixture()
+    assert inspection.validate_container(compress_zws(raw)) == inspection.validate_container(raw)
+
+
+def test_preflight_rejects_malformed_zws():
+    raw = compress_zws(fixture())
+    with pytest.raises(inspection.InspectionError, match="Truncated ZWS compression header"):
+        inspection.validate_container(raw[:16])
+    with pytest.raises(inspection.InspectionError, match="compressed size"):
+        inspection.validate_container(raw[:-1])
+    with pytest.raises(inspection.InspectionError, match="LZMA properties"):
+        inspection.validate_container(raw[:12] + b"\xff" + raw[13:])
+    with pytest.raises(inspection.InspectionError, match="dictionary exceeds"):
+        inspection.validate_container(raw[:13] + struct.pack("<I", inspection.MAX_INPUT + 1) + raw[17:])
+    with pytest.raises(inspection.InspectionError, match="decoded ZWS size"):
+        inspection.validate_container(raw[:4] + struct.pack("<I", len(fixture()) - 1) + raw[8:])
+    with pytest.raises(inspection.InspectionError, match="Trailing data"):
+        inspection.validate_container(raw[:8] + struct.pack("<I", len(raw) - 16) + raw[12:] + b"\x00")
 
 
 def test_supervisor_timeout():
@@ -66,7 +100,8 @@ def test_mcp_catalog_has_readonly_tools():
             return await mcp.list_tools()
         return list((await mcp.get_tools()).values())
     tools = {t.name: t for t in asyncio.run(catalog())}
-    for name in ["list_avm2_classes", "inspect_avm2_method", "find_avm2_property_accesses"]:
+    for name in ["list_avm2_classes", "inspect_avm2_method", "find_avm2_property_accesses",
+                 "inspect_swf_linkage", "compare_avm2"]:
         annotations = tools[name].annotations
         destructive = getattr(annotations, "destructive_hint", None)
         if destructive is None:
@@ -75,7 +110,7 @@ def test_mcp_catalog_has_readonly_tools():
         if read_only is None:
             read_only = annotations.readOnlyHint
         assert destructive is False and read_only is True
-    assert len(tools) == 42
+    assert len(tools) == 44
 
 
 @pytest.fixture
@@ -85,6 +120,174 @@ def java_config(monkeypatch):
         pytest.skip("Set FFDEC_TEST_JAR to run real Java bridge tests")
     monkeypatch.setattr(inspection, "get_config",
         lambda: FFDecConfig(FFDecMode.JAR, jar))
+
+
+def comparison_fixture(first, second):
+    # Keep the frame header and FileAttributes, then concatenate two DoABC tags.
+    body = first[8:-4] + second[20:]
+    return first[:4] + struct.pack("<I", 8 + len(body)) + body
+
+
+def test_java_zws_inspection_and_comparison(java_config, tmp_path):
+    original = tmp_path / "original.swf"
+    compressed = tmp_path / "compressed.swf"
+    raw = fixture()
+    compressed_raw = compress_zws(raw)
+    original.write_bytes(raw)
+    compressed.write_bytes(compressed_raw)
+    result = inspection.inspect_avm2("accesses", compressed, property_name="value")
+    assert result["sha256"] == hashlib.sha256(compressed_raw).hexdigest()
+    row, = result["results"]
+    assert (row["method_id"], row["opcode"], row["offset"]) == (2, "setproperty", 3)
+    diff = inspection.compare_avm2(original, compressed)
+    assert diff["summary"]["unchanged"] == 4 and diff["results"] == []
+    assert compressed.read_bytes() == compressed_raw and original.read_bytes() == raw
+    assert set(tmp_path.iterdir()) == {original, compressed}
+
+
+def test_java_compare_reordered_abc_and_methods(java_config, tmp_path):
+    original = tmp_path / "original.swf"
+    patched = tmp_path / "patched.swf"
+    original_bytes = comparison_fixture(
+        fixture(call_named=True), fixture(class_name="Other")
+    )
+    patched_bytes = comparison_fixture(
+        fixture(class_name="Other", reindexed=True, method_order=(2, 3, 0, 1)),
+        fixture(value=8, reindexed=True, call_named=True, method_order=(2, 0, 3, 1)),
+    )
+    original.write_bytes(original_bytes)
+    patched.write_bytes(patched_bytes)
+    result = inspection.compare_avm2(original, patched)
+    assert result["summary"] == dict(changed=1, unchanged=7, added=0, removed=0,
+                                    ambiguous=0, indeterminate=0, unmatched=0)
+    row, = result["results"]
+    assert row["status"] == "changed" and "writeValue" in row["identity"]["owners"][0]
+    assert row["original"] == {"abc_index": 0, "method_id": 2}
+    assert row["patched"] == {"abc_index": 1, "method_id": 0}
+    assert row["original_body_sha256"] != row["patched_body_sha256"]
+    change, = row["instruction_changes"]
+    assert change["original"] == dict(offset=1, opcode="pushbyte", operands=[7],
+                                      normalized_operands=["7"], bytes_hex="2407")
+    assert change["patched"] == dict(offset=1, opcode="pushbyte", operands=[8],
+                                     normalized_operands=["8"], bytes_hex="2408")
+    assert row["instruction_change_count"] == 1 and row["next_instruction_offset"] is None
+
+    all_rows = inspection.compare_avm2(original, patched, include_unchanged=True, limit=7)
+    assert len(all_rows["results"]) == 7 and all_rows["next_offset"] == 7
+    with pytest.raises(inspection.InspectionError, match="both expected SHA-256"):
+        inspection.compare_avm2(original, patched, offset=7)
+    last = inspection.compare_avm2(
+        original, patched, include_unchanged=True, offset=7, limit=7,
+        expected_original_sha256=all_rows["original_sha256"],
+        expected_patched_sha256=all_rows["patched_sha256"],
+    )
+    assert len(last["results"]) == 1 and last["next_offset"] is None
+    assert last["results"][0] not in all_rows["results"]
+    assert original.read_bytes() == original_bytes and patched.read_bytes() == patched_bytes
+    assert set(tmp_path.iterdir()) == {original, patched}
+
+
+def test_java_compare_instruction_insertion_and_pagination(java_config, tmp_path):
+    original = tmp_path / "original.swf"
+    patched = tmp_path / "patched.swf"
+    original.write_bytes(fixture())
+    patched.write_bytes(fixture(method_code=b"\xd0" + b"\x02" * 21 + b"\x24\x07\x61\x03\x47"))
+    first = inspection.compare_avm2(original, patched, limit=1)
+    row, = first["results"]
+    assert row["instruction_change_count"] == 21
+    assert len(row["instruction_changes"]) == row["next_instruction_offset"] == 20
+    last = inspection.compare_avm2(
+        original, patched, limit=1, instruction_offset=row["next_instruction_offset"],
+        expected_original_sha256=first["original_sha256"],
+        expected_patched_sha256=first["patched_sha256"],
+    )
+    final_row, = last["results"]
+    changes = row["instruction_changes"] + final_row["instruction_changes"]
+    assert final_row["next_instruction_offset"] is None
+    assert all(c["original"] is None and c["patched"]["bytes_hex"] == "02" for c in changes)
+    assert [c["patched"]["offset"] for c in changes] == list(range(1, 22))
+
+
+def test_java_compare_closure_across_reordered_abc_and_methods(java_config, tmp_path):
+    original = tmp_path / "original.swf"
+    patched = tmp_path / "patched.swf"
+    original.write_bytes(comparison_fixture(fixture(nested=True), fixture(class_name="Other")))
+    patched.write_bytes(comparison_fixture(
+        fixture(class_name="Other"),
+        fixture(nested=True, value=8, reindexed=True, method_order=(4, 2, 0, 1, 3)),
+    ))
+    result = inspection.compare_avm2(original, patched)
+    assert result["summary"] == dict(changed=1, unchanged=8, added=0, removed=0,
+                                    ambiguous=0, indeterminate=0, unmatched=0)
+    closure, = result["results"]
+    assert closure["identity"]["kind"] == "closure"
+    assert closure["original"] == {"abc_index": 0, "method_id": 4, "enclosing_method_id": 2}
+    assert closure["patched"] == {"abc_index": 1, "method_id": 0, "enclosing_method_id": 1}
+
+
+def test_java_compare_closure_with_multiple_creation_sites(java_config, tmp_path):
+    original = tmp_path / "original.swf"
+    patched = tmp_path / "patched.swf"
+    original.write_bytes(fixture(nested=True))
+    # Both newfunction instructions refer to the same anonymous body.
+    patched.write_bytes(fixture(nested=True, method_code=b"\x40\x04\x29\x40\x04\x29\x47"))
+    result = inspection.compare_avm2(original, patched)
+    assert result["summary"] == dict(changed=0, unchanged=3, added=0, removed=0,
+                                    ambiguous=0, indeterminate=1, unmatched=2)
+    parent, = [row for row in result["results"] if row["status"] == "indeterminate"]
+    assert parent["original"]["method_id"] == parent["patched"]["method_id"] == 2
+    assert parent["unresolved"] == ["unanchored_or_ambiguous_method_operand"]
+
+
+def test_java_compare_preserves_ambiguity_and_unmatched(java_config, tmp_path):
+    original = tmp_path / "original.swf"
+    patched = tmp_path / "patched.swf"
+    original.write_bytes(comparison_fixture(fixture(), fixture(class_name="Legacy", nested=True)))
+    patched.write_bytes(comparison_fixture(fixture(), fixture()))
+    result = inspection.compare_avm2(original, patched)
+    assert result["summary"] == dict(changed=0, unchanged=0, added=0, removed=4,
+                                    ambiguous=12, indeterminate=0, unmatched=1)
+    assert all(row["original"] is None or row["patched"] is None for row in result["results"])
+
+
+def test_java_linkage_tags_and_pagination(java_config, tmp_path):
+    def tag(code, payload=b""):
+        assert len(payload) < 63
+        return struct.pack("<H", (code << 6) | len(payload)) + payload
+
+    end, show_frame = tag(0), tag(1)
+    inner = tag(39, struct.pack("<HH", 11, 2) + show_frame
+                + tag(70, b"\x20\x08\x07\x00Probe\x00child\x00")
+                + tag(26, b"\x01\x07\x00") + show_frame + end)
+    sprite = tag(39, struct.pack("<HH", 10, 1) + inner + show_frame + end)
+    symbols = tag(76, struct.pack("<HH", 2, 0) + b"Probe\x00\x0a\x00Linked\x00")
+    exports = tag(56, struct.pack("<HH", 1, 10) + b"probeExport\x00")
+    root = tag(26, b"\x02\x04\x00\x0a\x00")
+    body = fixture()[8:-4] + symbols + exports + sprite + root + show_frame + end
+    swf = tmp_path / "linkage.swf"
+    raw = b"FWS\x09" + struct.pack("<I", 8 + len(body)) + body
+    swf.write_bytes(raw)
+
+    first = inspection.inspect_avm2("linkage", swf, limit=2)
+    assert [(r["character_id"], r["name"]) for r in first["results"]] == [(0, "Probe"), (10, "Linked")]
+    assert first["next_offset"] == 2 and first["total"] == 6
+    rest = inspection.inspect_avm2(
+        "linkage", swf, offset=first["next_offset"], expected_sha256=first["sha256"]
+    )
+    exported, nested, move, placed_root = rest["results"]
+    assert rest["next_offset"] is None
+    assert (exported["kind"], exported["character_id"], exported["name"]) == (
+        "export_asset", 10, "probeExport"
+    )
+    assert (nested["timeline_path"], nested["frame"], nested["depth"]) == ([10, 11], 2, 7)
+    assert (nested["character_id"], nested["class_name"], nested["instance_name"]) == (None, "Probe", "child")
+    assert move["move"] and move["character_id"] is None
+    assert (placed_root["timeline_path"], placed_root["frame"], placed_root["depth"]) == ([], 1, 4)
+    filtered = inspection.inspect_avm2(
+        "linkage", swf, linkage_kind="placement", timeline="root", character_id=10
+    )
+    assert filtered["results"] == [placed_root]
+    assert swf.read_bytes() == raw and list(tmp_path.iterdir()) == [swf]
 
 
 def test_java_queries_and_pagination(java_config, tmp_path):
@@ -183,7 +386,7 @@ def test_java_unreachable_catch(java_config, tmp_path, monkeypatch):
         "accesses", str(path), abc_index=expected["abc_index"],
         property_name=expected["property_name"], expected_sha256=sha
     )
-    assert result["ffdec_version"] == "26.4.0"
+    assert result["ffdec_version"] in inspection.SUPPORTED_FFDEC_VERSIONS
     assert result["next_offset"] is None
     unreachable, = [row for row in result["results"] if "reachability" in row]
     assert unreachable["reachability"] == "unreachable"

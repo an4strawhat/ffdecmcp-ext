@@ -23,26 +23,66 @@ MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)**
 | `link_report` | Generate a linker/dependency XML report |
 | `generate_documentation` | AVM1/AVM2 P-code instruction reference |
 
-### AVM2 inspection (read-only, library-backed)
+### SWF and AVM2 inspection (read-only, library-backed)
 
-These three tools call the **FFDec Java library directly** — no CLI, no export
-files, no SWF modification:
+These tools inspect SWFs through the **FFDec Java library** without creating
+export files or modifying the SWF.
 
 | Tool | Description |
 |---|---|
+| `inspect_swf_linkage` | SymbolClass and ExportAssets entries, plus PlaceObject events in the root timeline and sprite timelines |
+| `compare_avm2` | Compare normalized AVM2 method bodies across two SWFs, with file-local locations for each side |
 | `list_avm2_classes` | Class identities, superclasses, interfaces, initializer IDs, and instance/static trait tables |
 | `inspect_avm2_method` | Method signature, direct/enclosing owners, exception table, decoded instructions |
 | `find_avm2_property_accesses` | Property reads/writes (`get/setproperty`, `get/setsuper`, `initproperty`, `get/setslot`, `get/setglobalslot`) with containing methods, lexical contexts and bytecode offsets |
 
 **Requirements:** Java 17+ **JDK** (the bridge uses the Java source-file
-launcher), FFDec **26.4.0** JAR via `FFDEC_PATH`, FWS/CWS input ≤64 MiB.
-Other signatures are rejected with an explicit error.
+launcher), FFDec **26.4.0 or 26.5.0** JAR via `FFDEC_PATH`, and FWS, CWS or
+ZWS input. The input, decoded SWF and ZWS LZMA dictionary each have a 64 MiB
+limit. The tool reports the SHA-256 of the original file, including when the
+input is compressed. Other signatures are rejected with an explicit error.
 
 **Bounded responses:** every response is limited by `max_bytes` (default 64 KiB)
 with cursor pagination — continue with `next_offset` as `offset` and the
 returned `sha256` as `expected_sha256`, keeping other parameters unchanged.
 Pagination is rejected if the file changes. Errors return structured
 `success:false` results without disconnecting.
+
+For linkage, filter by `kind` (`symbol_class`, `export_asset`, or
+`placement`), by an explicit `character_id`, or by `timeline` (`root` or
+`nested`). Character ID 0 includes the document class. A placement records its
+1-based frame, depth, 0-based tag index, declared class and instance names, and
+the enclosing sprite IDs in `timeline_path` (empty for root). Class-only
+placements and updates that omit a character ID return `null` for that field.
+Placement results describe tag events. They do not reconstruct display-list
+state across frames.
+
+For `compare_avm2`, pass `original_swf_path` and `patched_swf_path`. It matches
+unique named traits and initializer owners by signature across ABC and method
+reordering. It compares decoded instructions, resolved pool operands, branch
+and exception targets, and method-body metadata. Each matched row includes
+both file-local locations for follow-up with `inspect_avm2_method`.
+Changed rows include `instruction_changes` with both offsets, opcodes, decoded
+operands, normalized operands, and exact instruction bytes in hex. An inserted
+or deleted instruction has a null side. Pure index reordering is ignored.
+`metadata_changed` flags a difference outside the decoded instruction sequence.
+For very large edit regions the tool can align changes by position instead of
+finding a minimal edit sequence. It reports the alignment used.
+To page a method's instruction changes, select its method row with `offset`
+and `limit=1`, then pass its `next_instruction_offset` as `instruction_offset`.
+The summary includes unchanged pairs even when their rows are hidden. Set
+`include_unchanged` to see those rows. For pagination supply both returned
+SHA-256 values as `expected_original_sha256` and `expected_patched_sha256`.
+
+Anonymous methods can match through a `newfunction` chain rooted in a unique named
+method. Each link needs one creation site and a unique signature among anonymous
+siblings. Closure locations include the immediate `enclosing_method_id`; their
+identity uses a hash of the enclosing identity. Moving a closure to another
+parent, adding a same-signature sibling, or creating it from more than one site
+can leave the closure unmatched and the referring method indeterminate.
+Duplicate named identities produce ambiguous rows. A renamed owner or changed
+named signature can appear as an addition and removal. This comparison covers
+method bodies. Class layout, assets, and runtime equivalence are outside its scope.
 
 #### Slot and trait resolution
 
@@ -71,7 +111,8 @@ Pagination is rejected if the file changes. Errors return structured
 The MCP stdio checks verify complete pagination, named slot resolution,
 and the sole unreachable catch write against locally supplied expectations.
 They verify that the input hashes stay stable and that the server creates no
-export files in its working directory.
+export files in its working directory. When MCP stdio tests are enabled, a
+session teardown check scans pytest's actual temporary tree for scripts and CSVs.
 
 Keep the fixture manifest outside the checkout. Provide a JSON array containing
 one object per SWF. Each object has a `path` (absolute or relative to the
@@ -89,6 +130,23 @@ $env:FFDEC_TEST_JAR = 'C:\path\to\ffdec.jar'
 $env:FFDEC_TEST_ASSET_MANIFEST = 'C:\local-fixtures\inspection.json'
 $env:FFDEC_TEST_MCP_STDIO = '1'
 python -m pytest tests
+```
+
+For the patched-ZWS regression, add a `zws_patch` object to one local manifest
+entry that also has a `catch` object. Supply `abc_index`, `method_id`, and
+`offset` for a `pushbyte 0` instruction, and `method_hex` for its complete
+method body so the test can locate it uniquely. Supply the expected
+`class_count`, `linkage_rows`, `method_row_count` (including the metadata row),
+`method_count`, and `write_count`. Keep these values in the local manifest.
+The test changes the opcode to `pushshort 0` in a temporary ZWS copy and walks
+every property-write page. Allow several minutes per release.
+
+With `FFDEC_TEST_ASSET_MANIFEST` and `FFDEC_TEST_MCP_STDIO` set as above, run
+
+```powershell
+$env:FFDEC_TEST_JAR_26_4_0 = 'C:\path\to\FFDec-26.4.0\ffdec.jar'
+$env:FFDEC_TEST_JAR_26_5_0 = 'C:\path\to\FFDec-26.5.0\ffdec.jar'
+python -m pytest tests/test_mcp_stdio.py -k zws_opcode_patch
 ```
 
 ### Instance metadata (AMF)
@@ -202,8 +260,8 @@ Notes from testing: all 4,740 bundled SWFs were plain `CWS`/`ZWS2` (none pre-enc
 ## Quick Start
 
 **Prerequisites:** Python 3.10+, Java (for FFDec). No AIR SDK required.
-The AVM2 inspection tools additionally require a **Java 17+ JDK** and are
-verified against FFDec **26.4.0** JARs only.
+The read-only inspection tools additionally require a **Java 17+ JDK** and
+an FFDec **26.4.0 or 26.5.0** JAR.
 
 This fork is **not on PyPI** — install from git:
 

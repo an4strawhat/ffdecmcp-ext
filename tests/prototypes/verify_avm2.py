@@ -26,9 +26,10 @@ def u30(value):
 
 
 def fixture(value=7, dynamic=False, nested=False, reindexed=False, method_code=None,
-            activation=False, class_slots=False):
+            activation=False, class_slots=False, class_name="Probe", method_order=None,
+            call_named=False):
     """Minimal ABC with a known class, initializer, and property-write method."""
-    strings = ["", "Probe", "Object", "value", "writeValue"]
+    strings = ["", class_name, "Object", "value", "writeValue"]
     abc = struct.pack("<HH", 16, 46)
     abc += b"\x01\x01\x01"  # int, uint, double pools
     abc += u30(len(strings)) + b"".join(u30(len(s)) + s.encode() for s in strings[1:])
@@ -41,18 +42,20 @@ def fixture(value=7, dynamic=False, nested=False, reindexed=False, method_code=N
     if dynamic:
         abc += b"\x11"  # RTQNameL: namespace and name on stack
     count = 5 if nested else 4
+    order = tuple(range(count)) if method_order is None else method_order
+    ids = {logical: physical for physical, logical in enumerate(order)}
     abc += u30(count)
-    for i in range(count):
+    for i in order:
         abc += bytes([0, 0, 0, 2 if activation and i == 2 else 0])  # method_info
     abc += b"\x00"  # metadata
-    abc += b"\x01\x01\x02\x01\x00\x00"  # class, name, super, flags, interfaces, iinit
+    abc += b"\x01\x01\x02\x01\x00" + u30(ids[0])  # class, name, super, flags, interfaces, iinit
     abc += u30(2 if class_slots else 1)
-    abc += bytes([3 if reindexed else 4]) + b"\x01\x00\x02"  # writeValue -> method 2
+    abc += bytes([3 if reindexed else 4]) + b"\x01\x00" + u30(ids[2])  # writeValue
     if class_slots:
         abc += b"\x03\x00\x01\x00\x00"  # instance value, slot 1
-    abc += b"\x01"  # class_info cinit=1
+    abc += u30(ids[1])  # class_info cinit
     abc += b"\x01\x04\x00\x01\x00\x00" if class_slots else b"\x00"  # static writeValue, slot 1
-    abc += b"\x01\x03\x01\x01\x04\x01\x00"  # script init=3 + class trait
+    abc += b"\x01" + u30(ids[3]) + b"\x01\x01\x04\x01\x00"  # script init + class trait
     codes = [b"\xd0\x30\xd0\x49\x00\x47", b"\x47",
              b"\xd0\x24" + bytes([value]) + b"\x61\x03\x47", b"\x47"]
     if dynamic:
@@ -61,15 +64,18 @@ def fixture(value=7, dynamic=False, nested=False, reindexed=False, method_code=N
         codes[2] = b"\xd0\x24" + bytes([value]) + b"\x61\x04\x47"
     if nested:
         codes.append(codes[2])
-        codes[2] = b"\x40\x04\x29\x47"  # newfunction method4, pop, returnvoid
+        codes[2] = b"\x40" + u30(ids[4]) + b"\x29\x47"  # newfunction, pop, returnvoid
     if method_code is not None:
         codes[2] = method_code
     if class_slots:
         codes[1] = b"\xd0\x24\x07\x6d\x01\x47"
+    if call_named:
+        codes[1] = b"\xd0\x44" + u30(ids[2]) + b"\x00\x29\x47"  # callstatic, pop, returnvoid
     abc += u30(count)
-    for i, code in enumerate(codes):
+    for i in order:
+        code = codes[i]
         has_activation = activation and i == 2
-        abc += u30(i) + bytes([4, 1, 0, 2 if has_activation else 1])
+        abc += u30(ids[i]) + bytes([4, 1, 0, 2 if has_activation else 1])
         abc += u30(len(code)) + code + b"\x00"  # no exception handlers
         abc += b"\x01\x03\x00\x01\x00\x00" if has_activation else b"\x00"
     payload = struct.pack("<I", 0) + b"\x00" + abc

@@ -1,12 +1,14 @@
 """Supervised, bounded, read-only access to FFDec's Java library.
 
-This layer deliberately supports FFDec 26.4.0 JAR mode and FWS/CWS only.
+This layer supports FFDec 26.4.0 and 26.5.0 in JAR mode with FWS, CWS and ZWS.
 It never exports decompiled source or modifies the inspected artifact.
 """
 import hashlib
 import json
+import lzma
 import os
 from pathlib import Path
+import re
 import signal
 import struct
 import subprocess
@@ -21,7 +23,37 @@ class InspectionError(ValueError):
 
 
 MAX_INPUT = 64 * 1024 * 1024
-SUPPORTED_FFDEC = "26.4.0"
+SUPPORTED_FFDEC_VERSIONS = ("26.4.0", "26.5.0")
+
+
+def _decode_zws_body(data: bytes, body_size: int) -> bytes:
+    # ZWS stores the compressed length separately from the five LZMA properties.
+    if len(data) < 17:
+        raise InspectionError("Truncated ZWS compression header")
+    compressed_size, = struct.unpack_from("<I", data, 8)
+    if compressed_size != len(data) - 17:
+        raise InspectionError("Declared ZWS compressed size does not match payload")
+    properties = data[12]
+    lc, lp, pb = properties % 9, (properties // 9) % 5, properties // 45
+    if pb > 4 or lc + lp > 4:
+        raise InspectionError("Unsupported ZWS LZMA properties")
+    dictionary, = struct.unpack_from("<I", data, 13)
+    if dictionary > MAX_INPUT:
+        raise InspectionError("ZWS LZMA dictionary exceeds 64 MiB")
+    try:
+        decoder = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=[{
+            "id": lzma.FILTER_LZMA1, "dict_size": max(4096, dictionary),
+            "lc": lc, "lp": lp, "pb": pb,
+        }])
+        body = decoder.decompress(memoryview(data)[17:], max_length=body_size + 1)
+    except (lzma.LZMAError, ValueError) as exc:
+        raise InspectionError("Invalid ZWS LZMA stream") from exc
+    # Length-terminated streams may omit the LZMA end marker.
+    if len(body) != body_size:
+        raise InspectionError("Declared SWF size does not match decoded ZWS size")
+    if decoder.unused_data:
+        raise InspectionError("Trailing data after ZWS LZMA stream")
+    return body
 
 
 def validate_container(data: bytes) -> dict:
@@ -44,8 +76,10 @@ def validate_container(data: bytes) -> dict:
         if not dec.eof or dec.unused_data:
             raise InspectionError("Incomplete zlib stream or trailing compressed data")
         raw = b"FWS" + data[3:8] + body
+    elif data[:3] == b"ZWS":
+        raw = b"FWS" + data[3:8] + _decode_zws_body(data, size - 8)
     else:
-        raise InspectionError("Inspection supports FWS/CWS only; ZWS/GFX/encrypted input is not supported yet")
+        raise InspectionError("Inspection supports FWS, CWS and ZWS; GFX and encrypted input are unsupported")
     if len(raw) != size:
         raise InspectionError("Declared SWF size does not match decoded size")
     start = 8 + (5 + (raw[8] >> 3) * 4 + 7) // 8 + 4
@@ -144,26 +178,7 @@ def _run(command, timeout, output_limit):
     return output.decode("utf-8", "strict")
 
 
-def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
-                 property_name="", access="write", offset=0, limit=50,
-                 max_bytes=65_536, expected_sha256=None, timeout=60):
-    """Execute one bounded query. Offset cursors must be paired with SHA-256."""
-    if operation not in {"classes", "method", "accesses"}:
-        raise InspectionError("Unsupported inspection operation")
-    if not 1 <= limit <= 200 or not 4096 <= max_bytes <= 131_072:
-        raise InspectionError("limit must be 1..200 and max_bytes 4096..131072")
-    if offset < 0 or not 1 <= timeout <= 300:
-        raise InspectionError("offset must be nonnegative and timeout 1..300 seconds")
-    if abc_index is not None and abc_index < 0 or method_id is not None and method_id < 0:
-        raise InspectionError("ABC and method indices must be nonnegative")
-    if operation == "method" and (abc_index is None or method_id is None):
-        raise InspectionError("Method inspection requires abc_index and method_id")
-    if access not in {"read", "write", "all"}:
-        raise InspectionError("access must be read, write or all")
-    if len(property_name) > 512:
-        raise InspectionError("property_name is limited to 512 characters")
-    if offset and not expected_sha256:
-        raise InspectionError("Pagination requires expected_sha256 from the first response")
+def _validated_input(swf_path, expected_sha256):
     path = Path(swf_path).resolve()
     if not path.is_file():
         raise InspectionError("SWF file does not exist")
@@ -176,7 +191,28 @@ def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
     fingerprint = hashlib.sha256(data).hexdigest()
     if expected_sha256 and expected_sha256 != fingerprint:
         raise InspectionError("Artifact changed; restart inspection with offset=0")
-    validation = validate_container(data)
+    return path, fingerprint, validate_container(data)
+
+
+def _check_input_digest(path, fingerprint):
+    with path.open("rb") as stream:
+        after = hashlib.file_digest(stream, "sha256").hexdigest() if hasattr(hashlib, "file_digest") else hashlib.sha256(stream.read(MAX_INPUT + 1)).hexdigest()
+    if fingerprint != after:
+        raise InspectionError("Input changed while inspecting; results discarded")
+
+
+def _inspection_version(banner):
+    match = re.search(r"^[ \t]*JPEXS Free Flash Decompiler v\.([\w.+-]+)[ \t\r]*$",
+                      banner, flags=re.MULTILINE)
+    version = match.group(1) if match else None
+    if version not in SUPPORTED_FFDEC_VERSIONS:
+        detected = version or "unknown version"
+        supported = " or ".join(SUPPORTED_FFDEC_VERSIONS)
+        raise InspectionError(f"Inspection requires FFDec {supported}; detected {detected}")
+    return version
+
+
+def _bridge_command(timeout):
     config = get_config()
     if config.mode != FFDecMode.JAR:
         raise InspectionError("Inspection requires JAR mode; set FFDEC_PATH to ffdec.jar")
@@ -184,28 +220,92 @@ def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
     # Keep detection explicit; do not silently use an untested library API.
     banner = _run(["java", "-Xmx512m", "-Djava.awt.headless=true", "-jar",
                    str(jar), "-help"], min(timeout, 15), 65_536)
-    if "v." + SUPPORTED_FFDEC not in banner:
-        raise InspectionError("Inspection currently supports FFDec 26.4.0 only")
+    version = _inspection_version(banner)
     source = Path(__file__).with_name("java") / "InspectionBridge.java"
-    payload = _run(["java", "-Xmx512m", "-Djava.awt.headless=true", "-cp",
-        str(jar), str(source), operation, str(path),
+    return ["java", "-Xmx512m", "-Djava.awt.headless=true", "-cp", str(jar), str(source)], version
+
+
+def _check_page(offset, limit, max_bytes, timeout):
+    if not 1 <= limit <= 200 or not 4096 <= max_bytes <= 131_072:
+        raise InspectionError("limit must be 1..200 and max_bytes 4096..131072")
+    if offset < 0 or not 1 <= timeout <= 300:
+        raise InspectionError("offset must be nonnegative and timeout 1..300 seconds")
+
+
+def _bounded_result(result, max_bytes):
+    if len(json.dumps(result, ensure_ascii=True, separators=(",", ":")).encode()) > max_bytes:
+        raise InspectionError("Response envelope exceeds max_bytes; narrow the query")
+    return result
+
+
+def compare_avm2(original_swf_path, patched_swf_path, *, include_unchanged=False,
+                 offset=0, limit=50, max_bytes=65_536, timeout=60,
+                 expected_original_sha256=None, expected_patched_sha256=None,
+                 instruction_offset=0):
+    """Compare two validated SWFs through the same bounded read-only bridge."""
+    _check_page(offset, limit, max_bytes, timeout)
+    if not 0 <= instruction_offset <= MAX_INPUT:
+        raise InspectionError("instruction_offset is outside the supported range")
+    if (offset or instruction_offset) and not (expected_original_sha256 and expected_patched_sha256):
+        raise InspectionError("Pagination requires both expected SHA-256 values")
+    original, original_sha, original_validation = _validated_input(original_swf_path, expected_original_sha256)
+    patched, patched_sha, patched_validation = _validated_input(patched_swf_path, expected_patched_sha256)
+    bridge, version = _bridge_command(timeout)
+    command = bridge + ["compare", str(original), "-1", "-1", "", "write",
+        str(offset), str(limit), str(max_bytes), str(patched), str(include_unchanged).lower(),
+        str(instruction_offset)]
+    result = json.loads(_run(command, timeout, max_bytes))
+    _check_input_digest(original, original_sha)
+    _check_input_digest(patched, patched_sha)
+    result.update(success=True, ffdec_version=version,
+        original_sha256=original_sha, patched_sha256=patched_sha,
+        original_validation=original_validation, patched_validation=patched_validation)
+    return _bounded_result(result, max_bytes)
+
+
+def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
+                 property_name="", access="write", offset=0, limit=50,
+                 max_bytes=65_536, expected_sha256=None, timeout=60,
+                 linkage_kind="all", character_id=None, timeline="all"):
+    """Execute one bounded query. Offset cursors must be paired with SHA-256."""
+    if operation not in {"classes", "method", "accesses", "linkage"}:
+        raise InspectionError("Unsupported inspection operation")
+    _check_page(offset, limit, max_bytes, timeout)
+    if abc_index is not None and abc_index < 0 or method_id is not None and method_id < 0:
+        raise InspectionError("ABC and method indices must be nonnegative")
+    if operation == "method" and (abc_index is None or method_id is None):
+        raise InspectionError("Method inspection requires abc_index and method_id")
+    if access not in {"read", "write", "all"}:
+        raise InspectionError("access must be read, write or all")
+    if len(property_name) > 512:
+        raise InspectionError("property_name is limited to 512 characters")
+    if operation == "linkage":
+        if linkage_kind not in {"all", "symbol_class", "export_asset", "placement"}:
+            raise InspectionError("Invalid linkage kind")
+        if character_id is not None and not 0 <= character_id <= 65535:
+            raise InspectionError("character_id must be 0..65535")
+        if timeline not in {"all", "root", "nested"}:
+            raise InspectionError("Invalid timeline filter")
+    if offset and not expected_sha256:
+        raise InspectionError("Pagination requires expected_sha256 from the first response")
+    path, fingerprint, validation = _validated_input(swf_path, expected_sha256)
+    bridge, version = _bridge_command(timeout)
+    command = bridge + [operation, str(path),
         str(abc_index if abc_index is not None else -1),
         str(method_id if method_id is not None else -1), property_name, access,
-        str(offset), str(limit), str(max_bytes)], timeout, max_bytes)
-    # Detect concurrent changes; never return evidence under a stale digest.
-    with path.open("rb") as stream:
-        after = hashlib.file_digest(stream, "sha256").hexdigest() if hasattr(hashlib, "file_digest") else hashlib.sha256(stream.read(MAX_INPUT + 1)).hexdigest()
-    if fingerprint != after:
-        raise InspectionError("Input changed while inspecting; results discarded")
+        str(offset), str(limit), str(max_bytes)]
+    if operation == "linkage":
+        command.extend([linkage_kind, str(character_id if character_id is not None else -1), timeline])
+    payload = _run(command, timeout, max_bytes)
+    _check_input_digest(path, fingerprint)
     result = json.loads(payload)
-    result.update(success=True, sha256=fingerprint, ffdec_version=SUPPORTED_FFDEC,
+    result.update(success=True, sha256=fingerprint, ffdec_version=version,
         validation=validation, limitations=[
+            "Placements are raw tag events. Display-list state and inherited fields are not reconstructed.",
+        ] if operation == "linkage" else [
             "Property access search resolves named catch slots, explicit activation slots and directly declared class slots when supported control flow establishes the receiver. Inherited and automatic slot layouts are not inferred.",
             "Enclosing contexts are not proof of unique ownership or runtime execution.",
             "Container validation is not full ABC verification.",
             "Exact property-name filters omit unresolved runtime names and slots; use an empty filter to include them.",
         ])
-    # A conservative result cap also bounds duplicated MCP text/structured data.
-    if len(json.dumps(result, ensure_ascii=True, separators=(",", ":")).encode()) > max_bytes:
-        raise InspectionError("Response envelope exceeds max_bytes; narrow the query")
-    return result
+    return _bounded_result(result, max_bytes)
