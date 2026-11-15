@@ -2,9 +2,11 @@
 
 MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)** — exposes the full FFDec CLI to AI assistants: decompilation, inspection, SWF **editing**, format conversion, and HARMAN Air encryption.
 
-> **Fork notice:** maintained at [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext), based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). **Not published on PyPI** — install from git (see [Quick Start](#quick-start)). This fork (v0.3.0) adds the 33 missing FFDec commands as tools, fixes several upstream bugs, implements Air encryption natively in Python, and adds a library-backed read-only AVM2 inspection layer.
+> **Fork notice.** [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext) is based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). The fork extends FFDec CLI coverage, fixes upstream bugs, implements HARMAN Air encryption in Python, and adds library-backed read-only SWF and AVM2 inspection. Install the fork from Git using [Quick Start](#quick-start).
 
-**42 tools** — all verified against real SWFs (see [Verification](#verification)).
+**Release [v0.4.0](https://github.com/an4strawhat/ffdecmcp-ext/releases/tag/v0.4.0)** adds read-only SWF linkage inspection, instruction-level AVM2 comparison, and ZWS inspection on FFDec 26.4.0 and 26.5.0.
+
+**44 MCP tools.** See [Verification](#verification) for tested workflows.
 
 ## Tools
 
@@ -210,7 +212,7 @@ Besides the original `image`, `sound`, `font`, `shape`, `movie`, `binaryData`, `
 
 | Quirk | Handling |
 |---|---|
-| **`-encrypt` CLI is broken in FFDec 26.4.0** (and current master): the dispatcher calls `parseDecrypt` for both `encrypt` and `decrypt`, so `-encrypt` always decrypts and returns `FAIL` | `encrypt_swf`/`decrypt_swf` are implemented in Python (`aircrypto.py`, exact port of FFDec's `HarmanSwfEncrypt`). Encrypt self-verifies by decrypting in memory before writing |
+| **`-encrypt` CLI is broken in FFDec 26.4.0**: the dispatcher calls `parseDecrypt` for both `encrypt` and `decrypt`, so `-encrypt` always decrypts and returns `FAIL` | `encrypt_swf`/`decrypt_swf` are implemented in Python (`aircrypto.py`, exact port of FFDec's `HarmanSwfEncrypt`). Encrypt self-verifies by decrypting in memory before writing |
 | `-compress` requires the **method before the paths** (`-compress zlib in out`) although its help says the opposite; without a method it misparses silently | `compress_swf` always passes the method (default `zlib`) |
 | FFDec can exit **0 while writing a 0-byte output** | File-producing commands verify existence **and** non-empty size |
 | `-importSymbolClass` appends `symbols.csv` to the argument | `import_assets(symbolclass)` takes the **folder** containing `symbols.csv` |
@@ -223,7 +225,10 @@ Besides the original `image`, `sound`, `font`, `shape`, `movie`, `binaryData`, `
 
 ## Verification
 
-Tested against real files with FFDec 26.4.0 on Windows 11, Java 25, plus **43 unit tests** (`pytest`; Java-bridge tests opt in via `FFDEC_TEST_JAR`).
+For v0.4.0, **65 tests passed per release** on FFDec 26.4.0 and 26.5.0 with
+Java 25 on Windows. Each run included exhaustive property-write pagination and
+the patched-ZWS MCP regression. The export audit found no scripts or CSVs.
+The suites below record earlier CLI and interoperability checks.
 
 ### Suite 1 — single-player game SWF (2.89 MB, AS3, 305 classes, 20,130 tags)
 
@@ -250,9 +255,9 @@ cases; controlled single-method comparisons) and three representative real
 assets: **14,272 of 14,296 property writes** resolved to direct method owners,
 the remainder reported as unresolved lexical contexts. In-memory SymbolClass
 linkage matched CSV exports, including document-class character ID 0. Input
-SHA-256s stayed unchanged and inspection created no export files. An opt-in
-strict SWF preflight rejects malformed containers (including a truncated file
-that FFDec itself accepted). Details and reproducible scripts:
+SHA-256s stayed unchanged and inspection created no export files. The read-only
+tools validate SWF container and tag boundaries before calling the Java bridge.
+Details and reproducible scripts:
 `tests/prototypes/README.md`.
 
 Notes from testing: all 4,740 bundled SWFs were plain `CWS`/`ZWS2` (none pre-encrypted); shape-based SWFs export PNGs under `shapes/`, so `import_assets(shapes)` is the correct round-trip there; instance-metadata tools are wiring-tested via unknown-instance calls because the samples contain no named `PlaceObject` instances.
@@ -269,7 +274,8 @@ This fork is **not on PyPI** — install from git:
 pip install "ffdecmcp @ git+https://github.com/an4strawhat/ffdecmcp-ext.git"
 # or, for development:
 git clone https://github.com/an4strawhat/ffdecmcp-ext.git
-pip install -e "./ffdecmcp[dev]"
+cd ffdecmcp-ext
+pip install -e ".[dev]"
 ```
 
 ### Run the server
@@ -344,7 +350,7 @@ CLI arguments take precedence over environment variables.
 git clone https://github.com/an4strawhat/ffdecmcp-ext.git
 cd ffdecmcp-ext
 pip install -e ".[dev]"
-python -m pytest tests/          # 43 tests; set FFDEC_TEST_JAR to include Java bridge tests
+python -m pytest tests/          # Set FFDEC_TEST_JAR to include Java bridge tests.
 ```
 
 Verification against real SWFs (two full suites plus negative cases) was
