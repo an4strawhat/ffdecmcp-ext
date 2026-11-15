@@ -1,11 +1,14 @@
 # AVM2 inspection feasibility verification
 
-These are opt-in experiments, **not six new MCP tools**. They do not change the
-installed server, its catalog, or the public API.
+These opt-in scripts record the experiments that preceded the shipped inspection
+tools. The results and limitations below describe the prototype harnesses.
+For the server's current behavior, supported FFDec versions, and regression tests,
+see [SWF and AVM2 inspection](../../README.md#swf-and-avm2-inspection-read-only-library-backed).
 
 ## Run
 
-Requires a Java 17+ JDK (`java` and `javac`) and FFDec 26.4.0:
+The prototype runs documented here used a Java 17+ JDK (`java` and `javac`)
+and FFDec 26.4.0:
 
 ```text
 python tests/prototypes/verify_avm2.py --ffdec-jar "<FFDec installation>/ffdec.jar" --assets "<local fixture A.swf>" "<local fixture B.swf>" "<local fixture C.swf>"
@@ -50,22 +53,22 @@ Direct owner means a method attached to a class/script trait or initializer,
 not the inferred runtime type of the object receiving the property write.
 Script-level functions are explicitly labelled as script-owned.
 
-## What this proves for proposed tools
+## From prototype to released tools
 
-| Proposed tool | Verified capability | Still missing |
+| Tool | Prototype evidence | Status in v0.4.0 |
 |---|---|---|
-| `find_avm2_property_accesses` | Property instructions with method IDs, direct owners, multinames and offsets | MCP schema/filtering/pagination, closure ownership, slot resolution |
-| `inspect_avm2_method` | Raw method bytes, decoded instructions, stack/local limits, owners | Full signatures, exception-handler presentation, bounded instruction windows |
-| `list_avm2_classes` | Class/superclass identities, constructor/static initializer IDs, trait counts | Interface/detail presentation and pagination |
-| `find_avm2_references` | Multiname-bearing instruction references with owner context | Complete constant/trait/string references and semantic usages |
-| `inspect_swf_linkage` | Class/character mappings, export names and character dependencies in memory | Timeline placement references and complete nested-tag coverage |
-| `compare_avm2` | Detecting one changed method in a controlled fixture | Stable matching across reordered method/ABC indices, real patched-pair validation |
+| `find_avm2_property_accesses` | Property instructions with method IDs, direct owners, multinames and offsets | Shipped with filters, pagination, enclosing contexts, and supported slot resolution |
+| `inspect_avm2_method` | Raw method bytes, decoded instructions, stack/local limits, owners | Shipped with signatures, exception handlers, and paginated instructions |
+| `list_avm2_classes` | Class and superclass identities, initializer IDs, trait counts | Shipped with interfaces, trait tables, and pagination |
+| `find_avm2_references` | Multiname-bearing instruction references with owner context | Remains an experiment |
+| `inspect_swf_linkage` | Class and character mappings, export names, and dependencies | Shipped with SymbolClass and ExportAssets records and root and nested placement tags |
+| `compare_avm2` | One changed method in a controlled fixture | Shipped with matching across reordered ABC blocks and method IDs, qualified closure matching, and instruction-level diffs |
 
 The first two provide bytecode-location evidence not present in `dump_as3`
 or `link_report`. Class listing and linkage largely improve structure and the
 no-export workflow rather than introducing entirely new information.
 
-## Limitations and production requirements
+## Limitations of the original prototype
 
 - This prototype emits a large internal record stream to a subprocess pipe.
   It must **not** be exposed wholesale as an MCP response. Serialized records
@@ -82,9 +85,9 @@ no-export workflow rather than introducing entirely new information.
 - Do not infer that XML lacks bytecode because it contains no literal opcode
   names. The earlier string-only XML investigation was inconclusive; this
   experiment instead reads decoded method bodies directly.
-- Parsing still uses the installed FFDec library and materializes each SWF.
-  Memory/time limits, malformed-input tests, API-version checks and MCP-level
-  integration tests are required before shipping.
+- The prototype parses each SWF with the installed FFDec library. The production
+  bridge adds resource limits, container validation, version checks, and MCP
+  integration tests.
 
 No commits, tags, pushes, package version changes or server registrations are
 performed by these scripts.
@@ -100,8 +103,8 @@ python tests/prototypes/verify_limitations.py --ffdec-jar "<FFDec installation>/
 Initially **23/24 checks passed**: a truncated SWF was accepted by the
 underlying parser with process exit code 0. After adding the independent
 `strict_swf.py` preflight to this harness, **26/26 checks pass**, including
-rejection of that input before launching FFDec. The raw Java bridge and
-production server do not yet enforce this preflight.
+rejection of that input before launching FFDec. The production server has its
+own container and tag validation before invoking its Java bridge.
 
 Evidence from the follow-up:
 
@@ -109,20 +112,18 @@ Evidence from the follow-up:
   `newfunction` references recovers the known enclosing method context.
 - Graph unit tests preserve two possible contexts and terminate with a cycle.
   These graph tests do not establish complete ownership recovery on real games.
-- Runtime names/namespaces stay unresolved. A receiver type is not invented.
-  No actual receiver-type inference has been implemented.
+- Runtime names/namespaces stayed unresolved in the prototype.
 - A generated `setslot` fixture exposes slot ID 1 without incorrectly labelling
-  it a constant-pool property. Mapping slot IDs to traits is still unimplemented.
+  it a constant-pool property. The prototype did not map slot IDs to traits.
 - A fixture with a write after `returnvoid` demonstrates why bytecode presence
   is not proof of execution. It does not validate a general CFG algorithm.
 - Reindexing the fixture's multiname pool changes raw bytecode but leaves the
-  normalized instruction sequence equal. General cross-build method matching,
-  branch normalization and call-target matching remain unverified.
+  normalized instruction sequence equal. This experiment covered constant-pool
+  reindexing.
 - A reference pagination algorithm measures the serialized JSON envelope,
   handles escaped supplementary Unicode, returns all records once, detects an
-  oversized single result, and detects a stale artifact fingerprint. This runs
-  in the Python test harness; bridge-side pagination and MCP integration remain
-  to be built. Oversized records need an explicit production error response.
+  oversized single result, and detects a stale artifact fingerprint. This
+  measurement used the Python test harness.
 - Fixtures parse under a Java `-Xmx128m` heap cap, and a short subprocess
   deadline interrupts an invocation. This does not establish real-asset memory
   sufficiency, resource-exhaustion resilience or descendant-process cleanup.
@@ -130,11 +131,6 @@ Evidence from the follow-up:
   rejected by FFDec alone. The follow-up preflight addresses this envelope
   failure. Source hashes stayed unchanged and bridge working directories
   remained empty throughout.
-
-Still not verified: exception-aware reachability, timeline placement traversal,
-slot-trait inference, receiver/constant data flow, complete reference indexing,
-cross-version compatibility and actual bounded MCP responses. These are
-proposed engineering tasks, not implemented features.
 
 ## Strict validation and additional verification
 
@@ -156,17 +152,13 @@ Observed **23/23 additional checks passed**:
 - A **test-only stdio MCP server** pages 100 Unicode-heavy records without
   missing/repeated records; the largest reconstructed protocol result body
   measured **2,796 bytes**. The connection survives an intentional tool error.
-  This is not the six proposed tools, not the OpenCode-specific transport, and
-  not production Java-side pagination.
+  This measured the test-only server's response handling.
 
-The preflight deliberately supports **FWS/CWS only** and rejects other
-signatures rather than guessing. It checks SWF container/tag boundaries, not
-the complete ABC grammar, operand validity or verifier semantics. ZWS/encrypted
-input handling needs a separately validated path. Its strict trailing-data
-policy may reject noncanonical files that FFDec tolerates.
+The prototype `strict_swf.py` preflight accepts FWS and CWS. The released tools
+also accept ZWS on FFDec 26.4.0 and 26.5.0. Container validation covers SWF and
+tag boundaries. It does not establish full ABC verifier semantics.
 
-Remaining open work: full ABC malformed-input validation/fuzzing, ZWS preflight,
-receiver/constant data-flow analysis, trait-resolved slots, exception-aware CFG,
-complete timeline traversal, cross-build method matching, FFDec version
-compatibility, Java-side filtering and hostile-resource/process-tree cleanup.
-These remain **unverified**, not implicitly covered by the passing fixtures.
+These experiments leave complete reference indexing, general receiver-type
+inference, and exhaustive ABC validation outside their scope. See the
+[v0.4.0 release notes](https://github.com/an4strawhat/ffdecmcp-ext/releases/tag/v0.4.0)
+for the released feature summary.
