@@ -4,7 +4,9 @@ MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)**
 
 > **Fork notice.** [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext) is based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). The fork extends FFDec CLI coverage, fixes upstream bugs, implements HARMAN Air encryption in Python, and adds library-backed read-only SWF and AVM2 inspection. Install the fork from Git using [Quick Start](#quick-start).
 
-**Release [v0.4.0](https://github.com/an4strawhat/ffdecmcp-ext/releases/tag/v0.4.0)** adds read-only SWF linkage inspection, instruction-level AVM2 comparison, and ZWS inspection on FFDec 26.4.0 and 26.5.0.
+**Release [v0.4.1](https://github.com/an4strawhat/ffdecmcp-ext/releases/tag/v0.4.1)** fixes a false “Artifact changed” error when inspection requests supply a correct uppercase or mixed-case SHA-256 digest.
+
+**Release [v0.4.0](https://github.com/an4strawhat/ffdecmcp-ext/releases/tag/v0.4.0)** added read-only SWF linkage inspection, instruction-level AVM2 comparison, and ZWS inspection on FFDec 26.4.0 and 26.5.0.
 
 **44 MCP tools.** See [Verification](#verification) for tested workflows.
 
@@ -47,8 +49,10 @@ input is compressed. Other signatures are rejected with an explicit error.
 **Bounded responses:** every response is limited by `max_bytes` (default 64 KiB)
 with cursor pagination — continue with `next_offset` as `offset` and the
 returned `sha256` as `expected_sha256`, keeping other parameters unchanged.
-Pagination is rejected if the file changes. Errors return structured
-`success:false` results without disconnecting.
+Expected SHA-256 values must contain exactly 64 hexadecimal characters in any
+letter case. Malformed values receive a validation error. A valid digest that
+differs from the file's SHA-256 still returns “Artifact changed.” Errors return
+structured `success:false` results without disconnecting.
 
 For linkage, filter by `kind` (`symbol_class`, `export_asset`, or
 `placement`), by an explicit `character_id`, or by `timeline` (`root` or
