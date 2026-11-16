@@ -1,10 +1,12 @@
 """FFDec execution wrapper."""
 
+import filecmp
 import logging
 import os
 import re
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from typing import Any, Optional
 
@@ -50,6 +52,25 @@ def _clip_text(text: str, max_chars: int) -> tuple[str, dict[str, Any]]:
         info["truncated"] = True
         return text[:max_chars], info
     return text, info
+
+
+def _script_import_index(args: list[str]) -> int | None:
+    """Recognize the command after the pre-options documented for -importScript."""
+    option_sizes = {
+        "-air": 1, "-config": 2, "-configfile": 2, "-charset": 2, "-swfprofile": 2,
+        "-onerror": 2,
+    }
+    index = 0
+    while index < len(args):
+        arg = args[index].lower()
+        if arg == "-importscript":
+            return index
+        if arg not in option_sizes:
+            break
+        if arg == "-onerror" and index + 1 < len(args) and args[index + 1].lower() == "retry":
+            index += 1
+        index += option_sizes[arg]
+    return None
 
 
 class FFDecWrapper:
@@ -794,6 +815,96 @@ class FFDecWrapper:
         is_valid, error = validate_output_dir(str(Path(output_path).parent), create=True)
         if not is_valid:
             raise FFDecError(error)
+
+    def _script_import_candidates(
+        self, args: list[str], index: int, folder: Path, timeout: int | None,
+    ) -> dict[str, Any]:
+        """Compare conventional AS3 source paths with the input script inventory."""
+        root = folder / "scripts"
+        if not root.is_dir():
+            root = folder
+        try:
+            inventory = self._run_capture(
+                [*args[:index], "-dumpAS3", args[index + 1]],
+                timeout=min(timeout or self.config.timeout, 10), check_returncode=False,
+            )
+            lines = inventory["stdout"].strip().splitlines()
+            scripts = [re.fullmatch(r"([\w$]+(?:\.[\w$]+)*) \d+", line) for line in lines]
+            if inventory["returncode"] or not scripts or not all(scripts):
+                return {}
+            expected = {
+                os.path.normcase(match[1].replace(".", "/") + ".as")
+                for match in scripts if match
+            }
+            matched, unmatched = [], []
+            for source in sorted(root.rglob("*.as")):
+                if source.is_file():
+                    relative = source.relative_to(root).as_posix()
+                    group = matched if os.path.normcase(relative) in expected else unmatched
+                    group.append(relative)
+        except (FFDecError, OSError, UnicodeError) as exc:
+            logger.debug("Unable to check script import candidates: %s", exc)
+            return {}
+        return {
+            "script_root": str(root),
+            "matched_candidate_count": len(matched),
+            "unmatched_source_count": len(unmatched),
+            "matched_candidates": matched[:100],
+            "unmatched_sources": unmatched[:100],
+        }
+
+    def _run_script_import(
+        self, args: list[str], index: int, paths: tuple[Path, Path, Path] | None,
+        timeout: int | None,
+    ) -> dict[str, Any]:
+        if paths is None:
+            result = self._run_capture(args, timeout=timeout, check_returncode=False)
+            result["import_status"] = "failed" if result["returncode"] else "unverified"
+            result["import_message"] = (
+                "FFDec returned a nonzero exit code." if result["returncode"]
+                else "Use local input, output and staging paths to verify script import."
+            )
+            return result
+
+        source, destination, folder = paths
+        # A private sibling staging directory prevents stale outputs from passing
+        # verification and lets an in-place import compare against the original.
+        with TemporaryDirectory(prefix=".ffdec-import-", dir=destination.parent) as work:
+            staged = Path(work) / destination.name
+            command = args.copy()
+            command[index + 2] = self._normalize_paths(str(staged))[0]
+            result = self._run_capture(command, timeout=timeout, check_returncode=False)
+            if result["returncode"]:
+                return dict(result, import_status="failed",
+                            import_message="FFDec returned a nonzero exit code.")
+            if not staged.is_file() or not staged.stat().st_size:
+                return dict(result, import_status="failed",
+                            import_message="FFDec did not write a fresh, nonempty output SWF.")
+
+            try:
+                unchanged = filecmp.cmp(source, staged, shallow=False)
+            except OSError:
+                unchanged = None
+            result.update(self._script_import_candidates(args, index, folder, timeout))
+            try:
+                staged.replace(destination)
+            except OSError as exc:
+                return dict(result, import_status="failed",
+                            import_message=f"Could not write the destination SWF: {exc}")
+
+        if unchanged is None:
+            return dict(result, import_status="unverified",
+                        import_message="The SWF was written, but its bytes could not be compared.")
+        if unchanged:
+            status = "no_change"
+            message = ("The output is byte-for-byte identical to the input. Supply scripts/ "
+                       "or its parent and preserve package paths for existing scripts.")
+        else:
+            status = "output_changed"
+            message = "Output SWF bytes differ. Individual replacements are unverified."
+        if result.get("unmatched_source_count"):
+            message += " Some staged AS3 sources have no matching input script path."
+        return dict(result, import_status=status, import_message=message)
 
     # ------------------------------------------------------------------
     # Inspection commands (console output)
@@ -1856,6 +1967,18 @@ class FFDecWrapper:
             args.append("nofill")
         args.append(folder_norm)
 
+        if key == "script":
+            paths = (Path(swf_path).resolve(), Path(output_path).resolve(), Path(folder).resolve())
+            result = self._run_script_import(args, 0, paths, timeout)
+            return {
+                **result,
+                "success": result["import_status"] != "failed",
+                "swf_path": swf_path,
+                "output_path": output_path,
+                "asset_type": key,
+                "message": result["import_message"],
+            }
+
         self._execute(args, timeout=timeout)
         return {
             "success": True,
@@ -2385,16 +2508,28 @@ class FFDecWrapper:
         if not args:
             raise FFDecError("No arguments provided")
 
-        out = self._run_capture(
-            [str(a) for a in args], timeout=timeout, check_returncode=False
-        )
+        command = [str(a) for a in args]
+        index = _script_import_index(command)
+        if index is not None and len(command) == index + 4:
+            paths = None
+            if self.config.mode != FFDecMode.WSL and "/dev/stdin" not in command[index + 1:]:
+                cwd = Path.cwd()
+                if self.config.mode == FFDecMode.JAR:
+                    cwd = Path(self.config.path).resolve().parent
+                source, destination, folder = (
+                    (cwd / value).resolve() for value in command[index + 1:]
+                )
+                if source.is_file() and destination.parent.is_dir():
+                    paths = (source, destination, folder)
+            out = self._run_script_import(command, index, paths, timeout)
+        else:
+            out = self._run_capture(command, timeout=timeout, check_returncode=False)
         stdout, clip = _clip_text(out["stdout"], max_chars)
         result: dict[str, Any] = {
+            **out,
             "success": True,
             "args": args,
             "stdout": stdout,
-            "stderr": out["stderr"],
-            "returncode": out["returncode"],
             **clip,
         }
         if outfile:
@@ -2411,5 +2546,5 @@ class FFDecWrapper:
                 )
             )
         else:
-            result["message"] = "FFDec executed"
+            result["message"] = out.get("import_message", "FFDec executed")
         return result

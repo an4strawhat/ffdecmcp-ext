@@ -1345,6 +1345,10 @@ def import_assets(
     """
     Bulk import assets into a SWF file (pairs with extract_assets exports).
 
+    For AS3 replacement, pass scripts/ or its parent and preserve package
+    paths under scripts/. Bulk import may skip unmatched sources such as
+    standalone new classes. Check import_status for the observed outcome.
+
     Args:
         swf_path: Absolute path to the SWF file
         output_path: Path for the resulting SWF file
@@ -1964,6 +1968,8 @@ def run_ffdec(
     "C:/file.swf"], or ["-storeConfigFile", "config.toml"].
     Large stdout is clipped to `max_chars`; pass `outfile` to save the
     complete stdout.
+    Recognized -importScript calls report import_status separately from
+    process completion. See import_assets for the AS3 staging layout.
 
     Args:
         args: FFDec command-line arguments (without the executable itself)

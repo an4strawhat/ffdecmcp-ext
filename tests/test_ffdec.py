@@ -3,7 +3,61 @@
 import pytest
 from pathlib import Path
 
+from ffdecmcp.config import FFDecConfig, FFDecMode
 from ffdecmcp.ffdec import FFDecWrapper, FFDecError
+
+
+@pytest.mark.parametrize("raw", [False, True])
+def test_script_import_rejects_stale_destination(tmp_path, monkeypatch, raw):
+    wrapper = FFDecWrapper(FFDecConfig(path="ffdec", mode=FFDecMode.NATIVE))
+    source, destination = tmp_path / "input.swf", tmp_path / "out.swf"
+    source.write_bytes(b"original")
+    destination.write_bytes(b"pre-existing result")
+    args = ["-importScript", str(source), str(destination), str(tmp_path)]
+
+    def capture(command, **kwargs):
+        assert command[0] == "-importScript"
+        assert Path(command[2]) != destination
+        assert not Path(command[2]).exists()
+        return {"returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(wrapper, "_run_capture", capture)
+    if raw:
+        result = wrapper.run_ffdec(args)
+    else:
+        result = wrapper.import_assets(str(source), str(destination), "script", str(tmp_path))
+    assert result["success"] is raw
+    assert result["returncode"] == 0
+    assert result["import_status"] == "failed"
+    assert destination.read_bytes() == b"pre-existing result"
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_script_import_reports_as3_candidates(tmp_path, monkeypatch, replacement):
+    wrapper = FFDecWrapper(FFDecConfig(path="ffdec", mode=FFDecMode.NATIVE))
+    source, destination = tmp_path / "input.swf", tmp_path / "out.swf"
+    source.write_bytes(b"original")
+    scripts = tmp_path / "scripts" / "example"
+    scripts.mkdir(parents=True)
+    (scripts / "New.as").touch()
+    if replacement:
+        (scripts / "Existing.as").touch()
+
+    def capture(command, **kwargs):
+        assert command[0] == "-air"
+        if command[1] == "-dumpAS3":
+            return {"returncode": 0, "stdout": "example.Existing 0\n", "stderr": ""}
+        assert command[1] == "-importScript"
+        Path(command[3]).write_bytes(b"replacement" if replacement else b"original")
+        return {"returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(wrapper, "_run_capture", capture)
+    args = ["-air", "-importScript", str(source), str(destination), str(tmp_path)]
+    result = wrapper.run_ffdec(args)
+    assert result["args"] == args
+    assert result["import_status"] == ("output_changed" if replacement else "no_change")
+    assert result["matched_candidates"] == (["example/Existing.as"] if replacement else [])
+    assert result["unmatched_sources"] == ["example/New.as"]
 
 
 class TestFFDecWrapper:

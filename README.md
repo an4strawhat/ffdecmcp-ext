@@ -204,6 +204,24 @@ python -m pytest tests/test_mcp_stdio.py -k zws_opcode_patch
 | `search_memory` | Find SWFs in process memory (names or PIDs) |
 | `run_ffdec` | Generic FFDec CLI passthrough — any command not covered above |
 
+For AS3 script replacement, pass the export's `scripts/` directory or its
+parent to `import_assets(asset_type="script")` or FFDec's `-importScript`.
+Keep package paths relative to that directory. For example, stage
+`com/example/Main.as` under `scripts/` and pass `scripts/` or the export
+root. Passing the package directory itself can silently skip the replacement.
+FFDec 26.5.0's bulk importer replaces existing scripts and skipped standalone
+new AS3 classes in testing.
+
+Both tools report `import_status` for recognized script imports. `no_change`
+means the output is byte-for-byte identical to the input. `output_changed`
+means the bytes differ, with individual replacements still unverified.
+`failed` indicates a CLI or output-write failure. `unverified` indicates
+that local output verification was unavailable. The raw tool's `success`
+field describes execution completion. Check `returncode` and `import_status`
+for the outcome. When an AS3 inventory is available, the response reports
+counts and up to 100 paths each for replacement candidates and unmatched
+sources. These are path matches against the input inventory.
+
 ### `extract_assets` extensions
 
 Besides the original `image`, `sound`, `font`, `shape`, `movie`, `binaryData`, `all`, the tool now accepts `text`, `frame`, `sprite`, `button`, `morphshape`, `font4`, `symbolClass`, `fla`, `xfl`, and supports:
