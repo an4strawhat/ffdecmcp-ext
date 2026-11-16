@@ -6,4 +6,4 @@ decompilation, inspection, SWF editing, format conversion and HARMAN Air
 encryption.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.2"

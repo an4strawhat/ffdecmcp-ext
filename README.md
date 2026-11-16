@@ -4,6 +4,8 @@ MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)**
 
 > **Fork notice.** [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext) is based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). The fork extends FFDec CLI coverage, fixes upstream bugs, implements HARMAN Air encryption in Python, and adds library-backed read-only SWF and AVM2 inspection. Install the fork from Git using [Quick Start](#quick-start).
 
+**Release [v0.4.2](https://github.com/an4strawhat/ffdecmcp-ext/tree/v0.4.2)** reports no-op script imports, flags unmatched AS3 sources when the input inventory is available, and verifies fresh output before replacing the destination. See [AS3 script import](#as3-script-import).
+
 **Release [v0.4.1](https://github.com/an4strawhat/ffdecmcp-ext/releases/tag/v0.4.1)** fixes a false “Artifact changed” error when inspection requests supply a correct uppercase or mixed-case SHA-256 digest.
 
 **Release [v0.4.0](https://github.com/an4strawhat/ffdecmcp-ext/releases/tag/v0.4.0)** added read-only SWF linkage inspection, instruction-level AVM2 comparison, and ZWS inspection on FFDec 26.4.0 and 26.5.0.
@@ -203,6 +205,8 @@ python -m pytest tests/test_mcp_stdio.py -k zws_opcode_patch
 | `extract_swf_files` | Extract SWFs from ZIP/binary files (`all`/`biggest`/`smallest`/`first`/`last`) |
 | `search_memory` | Find SWFs in process memory (names or PIDs) |
 | `run_ffdec` | Generic FFDec CLI passthrough — any command not covered above |
+
+### AS3 script import
 
 For AS3 script replacement, pass the export's `scripts/` directory or its
 parent to `import_assets(asset_type="script")` or FFDec's `-importScript`.

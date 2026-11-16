@@ -5,6 +5,10 @@ tools. The results and limitations below describe the prototype harnesses.
 For the server's current behavior, supported FFDec versions, and regression tests,
 see [SWF and AVM2 inspection](../../README.md#swf-and-avm2-inspection-read-only-library-backed).
 
+The [v0.4.2 tag](https://github.com/an4strawhat/ffdecmcp-ext/tree/v0.4.2) adds
+script-import diagnostics in the server. See [AS3 script import](../../README.md#as3-script-import)
+for the behavior of the two import tools.
+
 ## Run
 
 The prototype runs documented here used a Java 17+ JDK (`java` and `javac`)
