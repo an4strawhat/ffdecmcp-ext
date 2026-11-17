@@ -4,6 +4,8 @@ MCP (Model Context Protocol) wrapper for **JPEXS Free Flash Decompiler (FFDec)**
 
 > **Fork notice.** [an4strawhat/ffdecmcp-ext](https://github.com/an4strawhat/ffdecmcp-ext) is based on [sublimnl/ffdecmcp](https://github.com/sublimnl/ffdecmcp) v0.1.2 (MIT). The fork extends FFDec CLI coverage, fixes upstream bugs, implements HARMAN Air encryption in Python, and adds library-backed read-only SWF and AVM2 inspection. Install the fork from Git using [Quick Start](#quick-start).
 
+**Release [v0.5.0](https://github.com/an4strawhat/ffdecmcp-ext/tree/v0.5.0)** adds `owner_sprite_id` to `inspect_swf_linkage` for direct sprite placements, preserving null-ID events and combining owner and character filters before pagination. The export audit now distinguishes declared, unchanged test inputs from unexpected exports. Verified with 105 passing tests, including FFDec 26.4.0 and 26.5.0 integration checks. This tag identifies commit `ac9fe0a`; package version fields at that commit remain `0.4.2`.
+
 **Release [v0.4.2](https://github.com/an4strawhat/ffdecmcp-ext/tree/v0.4.2)** reports no-op script imports, flags unmatched AS3 sources when the input inventory is available, and verifies fresh output before replacing the destination. See [AS3 script import](#as3-script-import).
 
 **Release [v0.4.1](https://github.com/an4strawhat/ffdecmcp-ext/releases/tag/v0.4.1)** fixes a false “Artifact changed” error when inspection requests supply a correct uppercase or mixed-case SHA-256 digest.
