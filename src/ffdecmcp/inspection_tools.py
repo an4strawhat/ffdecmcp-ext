@@ -66,6 +66,7 @@ def register_inspection_tools(mcp):
         timeline: Literal["all", "root", "nested"] = "all",
         offset: Index = 0, limit: Limit = 50, max_bytes: Budget = 65_536,
         expected_sha256: Optional[str] = None, timeout: Deadline = 60,
+        owner_sprite_id: Optional[Annotated[int, Field(strict=True, ge=1, le=65535)]] = None,
     ) -> dict:
         """Read SymbolClass, ExportAssets and PlaceObject tags without exporting files.
 
@@ -75,13 +76,19 @@ def register_inspection_tools(mcp):
         and tag_index starts at 0 within its timeline. Placements are tag events.
         A null character_id means the tag omits an ID, as in class-only or
         move-only records. class_name and instance_name come from the tag.
+        owner_sprite_id (integer 1..65535) selects placements directly inside that DefineSprite,
+        including null-ID events, and excludes descendant timelines. Requires
+        kind="placement" and timeline="all" or "nested". An additional
+        character_id filter is combined with AND. Empty sprites return zero
+        rows; missing and non-sprite owners return errors. Filtering precedes
+        pagination. These references do not describe complete dependencies.
         Continue with next_offset and sha256 as expected_sha256, with the same
         filters. Requires Java 17+ JDK, FFDec 26.4.0 or 26.5.0 JAR, FWS/CWS/ZWS <=64 MiB.
         """
         return _query("linkage", swf_path=swf_path, linkage_kind=kind,
             character_id=character_id, timeline=timeline, offset=offset,
             limit=limit, max_bytes=max_bytes, expected_sha256=expected_sha256,
-            timeout=timeout)
+            timeout=timeout, owner_sprite_id=owner_sprite_id)
 
     @mcp.tool(annotations=hints)
     def list_avm2_classes(

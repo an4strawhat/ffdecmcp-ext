@@ -269,7 +269,8 @@ def compare_avm2(original_swf_path, patched_swf_path, *, include_unchanged=False
 def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
                  property_name="", access="write", offset=0, limit=50,
                  max_bytes=65_536, expected_sha256=None, timeout=60,
-                 linkage_kind="all", character_id=None, timeline="all"):
+                 linkage_kind="all", character_id=None, timeline="all",
+                 owner_sprite_id=None):
     """Execute one bounded query. Offset cursors must be paired with SHA-256."""
     if operation not in {"classes", "method", "accesses", "linkage"}:
         raise InspectionError("Unsupported inspection operation")
@@ -289,6 +290,13 @@ def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
             raise InspectionError("character_id must be 0..65535")
         if timeline not in {"all", "root", "nested"}:
             raise InspectionError("Invalid timeline filter")
+    if owner_sprite_id is not None:
+        if type(owner_sprite_id) is not int or not 1 <= owner_sprite_id <= 65535:
+            raise InspectionError("owner_sprite_id must be an integer in 1..65535")
+        if operation != "linkage" or linkage_kind != "placement":
+            raise InspectionError('owner_sprite_id requires kind="placement"')
+        if timeline == "root":
+            raise InspectionError('owner_sprite_id cannot be combined with timeline="root"')
     if offset and expected_sha256 is None:
         raise InspectionError("Pagination requires expected_sha256 from the first response")
     path, fingerprint, validation = _validated_input(swf_path, expected_sha256)
@@ -299,6 +307,8 @@ def inspect_avm2(operation, swf_path, *, abc_index=None, method_id=None,
         str(offset), str(limit), str(max_bytes)]
     if operation == "linkage":
         command.extend([linkage_kind, str(character_id if character_id is not None else -1), timeline])
+        if owner_sprite_id is not None:
+            command.append(str(owner_sprite_id))
     payload = _run(command, timeout, max_bytes)
     _check_input_digest(path, fingerprint)
     result = json.loads(payload)

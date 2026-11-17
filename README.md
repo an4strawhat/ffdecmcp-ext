@@ -65,6 +65,25 @@ placements and updates that omit a character ID return `null` for that field.
 Placement results describe tag events. They do not reconstruct display-list
 state across frames.
 
+To inspect placements directly inside a sprite, use `owner_sprite_id` (1–65535)
+with `kind="placement"` and `timeline="all"` (the default) or `"nested"`:
+
+```json
+{"swf_path":"example.swf","kind":"placement","owner_sprite_id":10,"limit":50}
+```
+
+This selects the immediate containing DefineSprite timeline, whereas
+`character_id` selects the character referenced by each tag. Supply both to
+combine them with AND. Owner filtering excludes descendant timelines, preserves
+`timeline_path` and null-ID move-only/class-only events, and occurs before
+pagination and response-size limits. Keep the owner and other filters unchanged
+when continuing with `next_offset` and `expected_sha256`.
+An existing empty sprite succeeds with zero rows. Missing IDs and non-sprite
+IDs return distinct errors; `kind` other than `"placement"` and
+`timeline="root"` are rejected when an owner is supplied. Omitting the owner
+preserves existing behavior. Placement references do not establish complete
+font or script dependencies, removal events, or standalone extractability.
+
 For `compare_avm2`, pass `original_swf_path` and `patched_swf_path`. It matches
 unique named traits and initializer owners by signature across ABC and method
 reordering. It compares decoded instructions, resolved pool operands, branch
@@ -139,6 +158,13 @@ $env:FFDEC_TEST_ASSET_MANIFEST = 'C:\local-fixtures\inspection.json'
 $env:FFDEC_TEST_MCP_STDIO = '1'
 python -m pytest tests
 ```
+
+With stdio tests enabled, the session audit rejects unexpected script and CSV
+files in pytest's scratch tree. Tests that intentionally create input files
+with those extensions must call the `declare_export_audit_input(path)` fixture
+after writing each input and before invoking a tool. Only those exact files
+with unchanged contents are exempt; new files and overwritten inputs still fail
+the audit.
 
 For the patched-ZWS regression, add a `zws_patch` object to one local manifest
 entry that also has a `catch` object. Supply `abc_index`, `method_id`, and

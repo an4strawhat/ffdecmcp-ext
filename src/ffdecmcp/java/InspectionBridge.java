@@ -367,7 +367,7 @@ public class InspectionBridge {
                 resolved.put(ins.getAddress(), new ResolvedSlot(receiver, nameIndex, unreachable));
         }
     }
-    record LinkageFilter(String kind, int characterId, String timeline) {
+    record LinkageFilter(String kind, int characterId, String timeline, int ownerSpriteId) {
         boolean matches(String rowKind, int id) {
             return (kind.equals("all") || kind.equals(rowKind))
                 && (characterId < 0 || characterId == id);
@@ -394,6 +394,8 @@ public class InspectionBridge {
         boolean root = path.isEmpty();
         boolean include = filter.timeline().equals("all")
             || filter.timeline().equals(root ? "root" : "nested");
+        include &= filter.ownerSpriteId() < 0
+            || !root && path.get(path.size() - 1) == filter.ownerSpriteId();
         int frame = 1, nextTagIndex = 0;
         for (Tag tag : tags) {
             int tagIndex = nextTagIndex++;
@@ -436,8 +438,20 @@ public class InspectionBridge {
         SWF swf = readSwf(args[1]);
         String summary = "";
         if (op.equals("linkage")) {
+            int ownerSpriteId = args.length > 12 ? Integer.parseInt(args[12]) : -1;
+            if (ownerSpriteId >= 0) {
+                if (ownerSpriteId == 0 || ownerSpriteId > 65535)
+                    throw new IllegalArgumentException("owner_sprite_id must be in 1..65535");
+                if (!args[9].equals("placement") || args[11].equals("root"))
+                    throw new IllegalArgumentException("owner_sprite_id requires placement kind and all or nested timeline");
+                var owner = swf.getCharacter(ownerSpriteId);
+                if (owner == null)
+                    throw new IllegalArgumentException("Owner character ID " + ownerSpriteId + " not found");
+                if (!(owner instanceof DefineSpriteTag))
+                    throw new IllegalArgumentException("Owner character ID " + ownerSpriteId + " is not a DefineSprite");
+            }
             linkage(swf.getTags(), new ArrayList<>(),
-                new LinkageFilter(args[9], Integer.parseInt(args[10]), args[11]));
+                new LinkageFilter(args[9], Integer.parseInt(args[10]), args[11], ownerSpriteId));
         } else if (op.equals("compare")) {
             SWF patched = args[1].equals(args[9]) ? swf : readSwf(args[9]);
             summary = ",\"summary\":" + Comparison.run(swf, patched, Boolean.parseBoolean(args[10]),

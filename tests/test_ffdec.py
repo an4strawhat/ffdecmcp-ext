@@ -33,15 +33,18 @@ def test_script_import_rejects_stale_destination(tmp_path, monkeypatch, raw):
 
 
 @pytest.mark.parametrize("replacement", [False, True])
-def test_script_import_reports_as3_candidates(tmp_path, monkeypatch, replacement):
+def test_script_import_reports_as3_candidates(tmp_path, monkeypatch, replacement,
+                                            declare_export_audit_input):
     wrapper = FFDecWrapper(FFDecConfig(path="ffdec", mode=FFDecMode.NATIVE))
     source, destination = tmp_path / "input.swf", tmp_path / "out.swf"
     source.write_bytes(b"original")
     scripts = tmp_path / "scripts" / "example"
     scripts.mkdir(parents=True)
     (scripts / "New.as").touch()
+    declare_export_audit_input(scripts / "New.as")
     if replacement:
         (scripts / "Existing.as").touch()
+        declare_export_audit_input(scripts / "Existing.as")
 
     def capture(command, **kwargs):
         assert command[0] == "-air"

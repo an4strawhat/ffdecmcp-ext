@@ -146,6 +146,9 @@ def test_mcp_catalog_has_readonly_tools():
             read_only = annotations.readOnlyHint
         assert destructive is False and read_only is True
     assert len(tools) == 44
+    owner_schema = tools["inspect_swf_linkage"].parameters["properties"]["owner_sprite_id"]
+    integer = next(s for s in owner_schema["anyOf"] if s["type"] == "integer")
+    assert integer["minimum"] == 1 and integer["maximum"] == 65535
 
 
 @pytest.fixture
@@ -323,6 +326,163 @@ def test_java_linkage_tags_and_pagination(java_config, tmp_path):
     )
     assert filtered["results"] == [placed_root]
     assert swf.read_bytes() == raw and list(tmp_path.iterdir()) == [swf]
+
+
+@pytest.fixture
+def owner_swf(tmp_path):
+    def build(repeats=1):
+        def tag(code, payload=b""):
+            size = len(payload)
+            return (struct.pack("<H", code << 6 | min(size, 63))
+                    + (struct.pack("<I", size) if size >= 63 else b"") + payload)
+
+        end, frame = tag(0), tag(1)
+        child = tag(26, b"\x02\x01\x00\x64\x00")
+        inner = tag(39, struct.pack("<HH", 11, 1) + child + frame + end)
+        direct = (tag(26, b"\x02\x01\x00\x0b\x00") + child
+                  + tag(26, b"\x01\x01\x00")
+                  + tag(70, b"\x20\x08\x02\x00Probe\x00" + b"x" * 250 + b"\x00"))
+        outer = tag(39, struct.pack("<HH", 10, 1) + inner + direct * repeats + frame + end)
+        empty = tag(39, struct.pack("<HH", 12, 1) + frame + end)
+        binary = tag(87, struct.pack("<HI", 100, 0) + b"data")
+        root = tag(26, b"\x02\x01\x00\x0a\x00")
+        body = fixture()[8:-4] + binary + outer + empty + root + frame + end
+        raw = b"FWS\x09" + struct.pack("<I", 8 + len(body)) + body
+        path = tmp_path / "owner.swf"
+        path.write_bytes(raw)
+        return path, raw
+    return build
+
+
+@pytest.mark.parametrize("arguments,message", [
+    ({"owner_sprite_id": 0}, "1..65535"),
+    ({"owner_sprite_id": 65536}, "1..65535"),
+    ({"owner_sprite_id": True}, "integer"),
+    ({"owner_sprite_id": 1.5}, "integer"),
+    ({"owner_sprite_id": 10, "linkage_kind": "all"}, 'requires kind="placement"'),
+    ({"owner_sprite_id": 10, "linkage_kind": "symbol_class"}, 'requires kind="placement"'),
+    ({"owner_sprite_id": 10, "linkage_kind": "export_asset"}, 'requires kind="placement"'),
+    ({"owner_sprite_id": 10, "timeline": "root"}, 'timeline="root"'),
+])
+def test_owner_validation_before_io(arguments, message):
+    with pytest.raises(inspection.InspectionError, match=message):
+        inspection.inspect_avm2("linkage", "unused.swf",
+            **dict({"linkage_kind": "placement"}, **arguments))
+
+
+def test_java_owner_direct_events_and_pagination(java_config, owner_swf):
+    path, raw = owner_swf()
+    def query(**kwargs):
+        return inspection.inspect_avm2("linkage", path, linkage_kind="placement", **kwargs)
+
+    baseline = query()
+    direct = query(owner_sprite_id=10)
+    assert direct["total"] == 4
+    assert direct["results"] == [r for r in baseline["results"] if r["timeline_path"] == [10]]
+    assert [r["character_id"] for r in direct["results"]] == [11, 100, None, None]
+    assert direct["results"][2]["move"]
+    assert direct["results"][3]["class_name"] == "Probe"
+    assert query(owner_sprite_id=10, timeline="nested") == direct
+    assert query(character_id=10)["results"][0]["timeline_path"] == []
+    assert query(owner_sprite_id=10, character_id=100)["results"] == [direct["results"][1]]
+    assert query(owner_sprite_id=10, character_id=10)["total"] == 0
+    assert query(owner_sprite_id=11)["results"][0]["timeline_path"] == [10, 11]
+    pages = []
+    offset = 0
+    while offset is not None:
+        page = query(owner_sprite_id=10, offset=offset, limit=1, expected_sha256=direct["sha256"])
+        assert page["total"] == 4
+        pages.extend(page["results"])
+        offset = page["next_offset"]
+    assert pages == direct["results"]
+    assert query(owner_sprite_id=12)["total"] == 0
+    for owner, error in [(999, "not found"), (100, "not a DefineSprite")]:
+        with pytest.raises(inspection.InspectionError, match=error):
+            query(owner_sprite_id=owner)
+    with pytest.raises(inspection.InspectionError, match="Artifact changed"):
+        query(owner_sprite_id=10, expected_sha256="0" * 64)
+    assert path.read_bytes() == raw
+    assert list(path.parent.iterdir()) == [path]
+
+
+def test_java_owner_budget_pagination(java_config, owner_swf):
+    path, raw = owner_swf(repeats=20)
+    options = dict(linkage_kind="placement", owner_sprite_id=10, limit=200)
+    whole = inspection.inspect_avm2("linkage", path, **options)
+    assert whole["total"] == 80
+    rows, offset, page_count = [], 0, 0
+    while offset is not None:
+        page = inspection.inspect_avm2("linkage", path, offset=offset, max_bytes=4096,
+            expected_sha256=whole["sha256"], **options)
+        assert len(json.dumps(page, ensure_ascii=True).encode("utf-8")) <= 4096
+        assert page["total"] == 80
+        assert page["results"]
+        rows.extend(page["results"])
+        offset = page["next_offset"]
+        page_count += 1
+    assert page_count > 1 and rows == whole["results"]
+    assert path.read_bytes() == raw and list(path.parent.iterdir()) == [path]
+
+
+def test_owner_tool_forwarding_and_structured_errors(monkeypatch):
+    from ffdecmcp import inspection_tools
+    class Registry:
+        tools = {}
+        def tool(self, **kwargs):
+            def register(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return register
+    registry = Registry()
+    inspection_tools.register_inspection_tools(registry)
+    tool = registry.tools["inspect_swf_linkage"]
+    with pytest.raises(ValueError, match="1..65535"):
+        # Direct Python calls still reach the inspection layer validation.
+        inspection.inspect_avm2("linkage", "unused", linkage_kind="placement", owner_sprite_id=-1)
+    result = tool("unused", kind="placement", owner_sprite_id=10, timeline="root")
+    assert result["success"] is False and result["results"] == []
+    assert 'timeline="root"' in result["error"]
+    monkeypatch.setattr(inspection_tools, "inspect_avm2", lambda op, **kw: (op, kw))
+    op, arguments = tool("unused", kind="placement", owner_sprite_id=10)
+    assert op == "linkage" and arguments["owner_sprite_id"] == 10
+
+
+def test_owner_deadline_is_preserved(owner_swf, monkeypatch):
+    path, raw = owner_swf()
+    monkeypatch.setattr(inspection, "_bridge_command", lambda timeout: (["bridge"], "26.5.0"))
+    def timeout(command, deadline, budget):
+        assert command[-1] == "10" and deadline == 1 and budget == 4096
+        raise inspection.InspectionError("Inspection deadline exceeded")
+    monkeypatch.setattr(inspection, "_run", timeout)
+    with pytest.raises(inspection.InspectionError, match="deadline"):
+        inspection.inspect_avm2("linkage", path, linkage_kind="placement",
+            owner_sprite_id=10, timeout=1, max_bytes=4096)
+    assert path.read_bytes() == raw
+
+
+def test_owner_stdio_schema_and_results(owner_swf, tmp_path):
+    if os.environ.get("FFDEC_TEST_MCP_STDIO") != "1" or not os.environ.get("FFDEC_TEST_JAR"):
+        pytest.skip("Set FFDEC_TEST_MCP_STDIO=1 and FFDEC_TEST_JAR for owner transport tests")
+    from tests.test_mcp_stdio import make_stdio_client
+    path, raw = owner_swf()
+    async def verify():
+        async with make_stdio_client(os.environ["FFDEC_TEST_JAR"], tmp_path) as client:
+            tool = next(t for t in await client.list_tools() if t.name == "inspect_swf_linkage")
+            assert "owner_sprite_id" in tool.inputSchema["properties"]
+            arguments = dict(swf_path=str(path), kind="placement", owner_sprite_id=10)
+            result = await client.call_tool("inspect_swf_linkage", arguments)
+            data = result.structured_content or json.loads(result.content[0].text)
+            assert data["success"] and data["total"] == 4
+            assert [r["character_id"] for r in data["results"]] == [11, 100, None, None]
+            for invalid in (0, 65536, True, 1.5, "10"):
+                bad = await client.call_tool("inspect_swf_linkage", dict(arguments, owner_sprite_id=invalid),
+                                             raise_on_error=False)
+                assert bad.is_error
+            incompatible = await client.call_tool("inspect_swf_linkage", dict(arguments, timeline="root"))
+            data = incompatible.structured_content or json.loads(incompatible.content[0].text)
+            assert not data["success"] and 'timeline="root"' in data["error"]
+    asyncio.run(verify())
+    assert path.read_bytes() == raw and list(tmp_path.iterdir()) == [path]
 
 
 def test_java_queries_and_pagination(java_config, tmp_path):
